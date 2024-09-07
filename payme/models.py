@@ -24,7 +24,7 @@ class MerchantTransactionsModel(BaseModel):
     created_at: datetime = None
     updated_at: Optional[datetime] = None
 
-    async def verify(self, db: Database):
+    async def verify(self, db: 'Database'):
         query = "SELECT price*session_quantity FROM orders WHERE order_id = $1"
         res_price = await db.execute(query, self.order_id, fetchval=True)
         if res_price:
