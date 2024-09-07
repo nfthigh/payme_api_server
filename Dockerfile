@@ -31,7 +31,7 @@ EXPOSE $PORT
 
 
 
-#CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT"]
 
 
 # docker build -t speaklish_payme . &&  docker stop speaklish_payme && docker rm speaklish_payme && docker run -d -p 8080:8080 --name speaklish_payme speaklish_payme
