@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from .postgres import Database
+
 from uuid import uuid4, UUID
 from .config import settings
 from .errors import IncorrectAmount, OrderDoesNotExist
