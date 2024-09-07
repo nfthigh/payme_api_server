@@ -1,10 +1,9 @@
-import asyncio
 import base64
 import binascii
 import logging
 from payme.config import settings
 from payme.errors import PermissionDenied
-import aiohttp
+
 
 
 def get_params(params: dict) -> dict:
