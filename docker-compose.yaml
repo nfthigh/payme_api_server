@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  payme_api:
+    image: "${DOCKER_IMAGE_NAME}"
+    container_name: "${DOCKER_CONTAINER_NAME}"
+    stop_signal: SIGINT
+    build:
+      context: .
+    working_dir: "/app"
+    volumes:
+      - .:/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "${DOCKER_PORT}"]
+    restart: unless-stopped
+    ports:
+      - "${DOCKER_PORT}:${DOCKER_PORT}"
+    env_file:
+      - ".env"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200k"
+        max-file: "10"
+    depends_on:
+      - db
+  
+  db:
+    container_name: ${DB_CONTAINER_NAME}
+    image: postgres:15
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # - ./init.sql:/docker-entrypoint-initdb.d/init.sql # Uncomment to run init.sql script for only when the container is created
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: "Asia/Tashkent"
+    # ports:         # Removed to prevent exposing PostgreSQL service to host machine
+    #   - "5432:5432"
+    
+volumes:
+  postgres-data:
+    
