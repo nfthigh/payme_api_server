@@ -45,7 +45,10 @@ DB_CONTAINER_NAME=speaklish_db
 
 if you wanna deploy it with heroku or railway add the following variables to your environment variables  
 create a new postgres instance and next python app 
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/iOjVDR?referralCode=6JbcGB)  
 
+
+https://railway.app/template/iOjVDR?referralCode=6JbcGB
 
 ## Usage
 
