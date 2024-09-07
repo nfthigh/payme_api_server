@@ -8,7 +8,7 @@ load_dotenv()
 class Config(BaseModel):
     postgres_url: str = os.getenv('DB_URL')
     payme_account: str = 'order_id'
-    payme_min_amount: int = os.getenv('PAYME_MIN_AMOUNT') # in tyiyn
+    payme_min_amount: int = 100 # in tyiyn
     payme_url: str = 'https://checkout.paycom.uz'
     payme_test_url: str = 'https://test.paycom.uz'
     payme_id: str = os.getenv('PAYME_ID')
