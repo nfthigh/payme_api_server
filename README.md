@@ -4,6 +4,7 @@
 ## Description
 
 This project is a simple API server that allows merchants to accept payments from customers using the Payme payment gateway. It provides two endpoints: one for the Payme merchant callback and another for the payment request and generating the payment URL.
+payme develop documentation [here](https://developer.help.paycom.uz/protokol-merchant-api/)
 
 ## Installation
 
