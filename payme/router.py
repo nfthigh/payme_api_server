@@ -70,6 +70,6 @@ async def create_order_func(user_id: int, price: float, quantity: int = 10) -> d
         new_order = await db.create_order(user_id=user_id, amount=price,
                                           session_quantity=quantity)
         checkout_url = await generate_link(order_id=new_order.order_id, amount=new_order.price * quantity)
-        return {**new_order.model_dump(), "amount": new_order.price* new_order.session_quantity,"url": checkout_url[0], }
+        return {**new_order.model_dump(), "amount": new_order.price* new_order.session_quantity,"url": checkout_url, }
     except Exception as e:
         raise e

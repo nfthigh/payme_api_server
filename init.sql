@@ -1,5 +1,5 @@
 CREATE TABLE public.orders (
-    order_id integer NOT NULL,
+    order_id serial primary key
     user_id bigint NOT NULL,
     price double precision NOT NULL,
     session_quantity integer NOT NULL,
