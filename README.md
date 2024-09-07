@@ -43,6 +43,9 @@ DOCKER_PORT=8080
 DB_CONTAINER_NAME=speaklish_db
 ```
 
+if you wanna deploy it with heroku or railway add the following variables to your environment variables  
+create a new postgres instance and next python app 
+
 
 ## Usage
 
