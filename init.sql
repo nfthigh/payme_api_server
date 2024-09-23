@@ -1,5 +1,5 @@
 CREATE TABLE public.orders (
-    order_id serial primary key
+    order_id serial primary key,
     user_id bigint NOT NULL,
     price double precision NOT NULL,
     session_quantity integer NOT NULL,
@@ -32,15 +32,6 @@ CREATE TABLE public.payme_transactions (
 );
 
 
-
-
-
---
--- Name: orders orders_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.orders
-    ADD CONSTRAINT orders_pkey PRIMARY KEY (order_id);
 
 
 --
