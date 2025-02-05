@@ -55,7 +55,7 @@ def authorize(password: str) -> bool:
     merchant_key = password.split(':')[-1]
 
     if merchant_key == settings.payme_key or merchant_key == settings.payme_test_key:
-    is_payme = True
+        is_payme = True
 
 
     if is_payme is False:
