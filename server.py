@@ -6,20 +6,20 @@ import logging
 import sys
 import hashlib
 import requests
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 
-# Загружаем переменные окружения
+# Загружаем переменные окружения из файла .env
 load_dotenv()
 
 # Параметры Payme
 PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")  # Например: 6758399fd33fb8548cede2a7
 MERCHANT_KEY = os.getenv("MERCHANT_KEY")            # Например: IA5W7ZF%&poyI9C#qXiIaijDsTSMaQ9S%GAT
 CHECKOUT_URL = os.getenv("CHECKOUT_URL", "https://checkout.paycom.uz")
-CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")
+CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")    # Например: https://payme-api-server.onrender.com/callback
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Параметры для уведомлений через Telegram (если нужно)
@@ -83,14 +83,15 @@ PRODUCTS_DATA = {
     }
 }
 
+##############################
+# Работа с базой данных (PostgreSQL)
+##############################
 def get_db():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-
-    # Создаем таблицу orders, если её нет
     create_table_query = """
     CREATE TABLE IF NOT EXISTS orders (
         order_id SERIAL PRIMARY KEY,
@@ -103,8 +104,8 @@ def init_db():
         location_lat REAL,
         location_lon REAL,
         status TEXT NOT NULL,
-        payment_amount INTEGER,        -- Храним в сумах!
-        payment_system TEXT,          
+        payment_amount INTEGER,
+        payment_system TEXT,
         create_time BIGINT,
         perform_time BIGINT,
         cancel_time BIGINT,
@@ -116,7 +117,6 @@ def init_db():
     """
     cur.execute(create_table_query)
     conn.commit()
-
     # Дополнительные столбцы, если нужно
     alter_list = [
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_amount INTEGER;",
@@ -127,7 +127,6 @@ def init_db():
             cur.execute(query)
         except Exception as e:
             logging.error("Ошибка ALTER TABLE: %s", e)
-
     conn.commit()
     cur.close()
     conn.close()
@@ -138,7 +137,7 @@ def current_timestamp():
     return int(round(time.time() * 1000))
 
 ##############################
-# Функция уведомления о платеже
+# Функции для уведомлений (Telegram)
 ##############################
 def send_message_to_telegram(chat_id, text, token):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -150,9 +149,6 @@ def send_message_to_telegram(chat_id, text, token):
         logging.error("Ошибка отправки в Телеграм: %s", e)
 
 def notify_payment_success(order):
-    """
-    Уведомляет клиента и/или группу о том, что заказ оплачен.
-    """
     try:
         conn = get_db()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -160,13 +156,11 @@ def notify_payment_success(order):
         client = cur.fetchone()
         cur.close()
         conn.close()
-
         if client:
             client_info = (f"Клиент: {client.get('name','N/A')} (@{client.get('username','')})\n"
                            f"Телефон: {client.get('contact','N/A')}")
         else:
             client_info = "Данные клиента не найдены."
-
         msg = (
             f"✅ Оплата заказа №{order['order_id']} успешно проведена!\n\n"
             f"{client_info}\n\n"
@@ -175,24 +169,16 @@ def notify_payment_success(order):
             f"Сумма: {order.get('payment_amount',0)} сум\n"
             f"Статус: {order.get('status','N/A')}"
         )
-        # Отправляем клиенту (если нужно) — order["user_id"]
         send_message_to_telegram(order["user_id"], msg, TELEGRAM_BOT_TOKEN)
-
-        # Отправляем группе, если задана
         if GROUP_CHAT_ID:
             send_message_to_telegram(GROUP_CHAT_ID, msg, TELEGRAM_BOT_TOKEN)
-
     except Exception as e:
         logging.error("Ошибка в notify_payment_success: %s", e)
 
 ##############################
-# Работа с БД (orders)
+# Функции работы с заказами (orders)
 ##############################
 def get_order_by_merchant_trans_id(merchant_trans_id):
-    """
-    Ищем заказ по merchant_trans_id (UUID), 
-    где payment_amount хранится в сумах.
-    """
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM orders WHERE merchant_trans_id=%s", (merchant_trans_id,))
@@ -202,9 +188,6 @@ def get_order_by_merchant_trans_id(merchant_trans_id):
     return row
 
 def get_order_by_transaction_id(transaction_id):
-    """
-    Ищем заказ по transaction_id (Payme).
-    """
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM orders WHERE transaction_id=%s", (transaction_id,))
@@ -246,13 +229,12 @@ def payment_form():
     order_id_param = request.args.get("order_id", "")
     amount = request.args.get("amount", "")
     merchant = request.args.get("merchant", PAYME_MERCHANT_ID)
-    callback = request.args.get("callback", CALLBACK_BASE_URL)
+    # Если параметр callback отсутствует или равен "None", используем CALLBACK_BASE_URL
+    callback = request.args.get("callback")
+    if not callback or callback.lower() == "none":
+        callback = CALLBACK_BASE_URL or "https://defaultdomain.com/callback"
     lang = request.args.get("lang", "ru")
     description = request.args.get("description", "Оплата заказа")
-
-    # Payme требует сумму в тийинах, 
-    # если у вас amount в сумах, нужно умножать на 100 (по необходимости).
-    # Здесь демонстрация — оставим как есть.
     html_form = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -280,10 +262,6 @@ def payment_form():
 # Payme JSON-RPC методы
 ##############################
 def is_amount_correct_in_sums_vs_tiyins(order_amount_sums: int, payme_amount_tiyins: int):
-    """
-    Сравнивает сумму, хранящуюся в сумах (order_amount_sums), 
-    с суммой, пришедшей от Payme в тийинах (payme_amount_tiyins).
-    """
     return order_amount_sums * 100 == payme_amount_tiyins
 
 def check_perform_transaction(payload):
@@ -292,36 +270,27 @@ def check_perform_transaction(payload):
     merchant_trans_id = account.get("order_id")
     if not merchant_trans_id:
         return error_order_id(payload)
-
     order = get_order_by_merchant_trans_id(merchant_trans_id)
     if not order:
         return error_order_id(payload)
-
-    # Проверка суммы: в БД хранится в сумах, от Payme приходит в тийинах
     if not is_amount_correct_in_sums_vs_tiyins(order["payment_amount"], params.get("amount", 0)):
         return error_amount(payload)
-
-    # Получаем название товара из заказа
     product = order.get("product", "Товар")
-    # Из словаря PRODUCTS_DATA получаем реальные данные для данного товара
     product_data = PRODUCTS_DATA.get(product, {
         "SPIC": "",
         "PackageCode": "",
         "CommissionInfo": {}
     })
-
-    # Формируем items с реальными данными:
     items = [{
         "discount": 0,
-        "title": product,                              # Название товара
-        "price": order["payment_amount"] * 100,          # Сумма в тийинах
+        "title": product,
+        "price": order["payment_amount"] * 100,
         "count": order.get("quantity", 1),
-        "code": product_data.get("SPIC", ""),            # SKU (из SPIC)
-        "units": 796,                                  # Единица измерения (примерное значение)
+        "code": product_data.get("SPIC", ""),
+        "units": 796,
         "vat_percent": 12,
-        "package_code": product_data.get("PackageCode", "")  # package_code из данных товара
+        "package_code": product_data.get("PackageCode", "")
     }]
-
     return {
         "id": payload.get("id"),
         "result": {
@@ -340,15 +309,12 @@ def create_transaction(payload):
     merchant_trans_id = account.get("order_id")
     if not merchant_trans_id:
         return error_order_id(payload)
-
     order = get_order_by_merchant_trans_id(merchant_trans_id)
     if not order:
         return error_order_id(payload)
-
     if not is_amount_correct_in_sums_vs_tiyins(order["payment_amount"], params.get("amount", 0)):
         return error_amount(payload)
-
-    transaction_id = params.get("id")  # Payme id
+    transaction_id = params.get("id")
     if order["status"].lower() in ["pending", "одобрен"]:
         create_time = current_timestamp()
         update_order(order["order_id"], {
@@ -385,7 +351,6 @@ def perform_transaction(payload):
     order = get_order_by_transaction_id(transaction_id)
     if not order:
         return error_transaction(payload)
-
     if order["status"].lower() == "processing":
         perform_time = current_timestamp()
         update_order(order["order_id"], {
@@ -420,11 +385,8 @@ def check_transaction(payload):
     params = payload.get("params", {})
     tid = params.get("id")
     order = get_order_by_transaction_id(tid)
-    if not order:
+    if not order or order.get("transaction_id") != tid:
         return error_transaction(payload)
-    if order.get("transaction_id") != tid:
-        return error_transaction(payload)
-
     if order["status"].lower() == "processing":
         state = 1
     elif order["status"].lower() == "completed":
@@ -435,7 +397,6 @@ def check_transaction(payload):
         state = -2
     else:
         return error_transaction(payload)
-
     return {
         "id": payload.get("id"),
         "result": {
@@ -453,11 +414,8 @@ def cancel_transaction(payload):
     params = payload.get("params", {})
     tid = params.get("id")
     order = get_order_by_transaction_id(tid)
-    if not order:
+    if not order or order.get("transaction_id") != tid:
         return error_transaction(payload)
-    if order.get("transaction_id") != tid:
-        return error_transaction(payload)
-
     cancel_time = current_timestamp()
     if order["status"].lower() in ["pending", "processing", "одобрен"]:
         new_status = "cancelled"
@@ -470,7 +428,6 @@ def cancel_transaction(payload):
         state_val = -1 if order["status"].lower() == "cancelled" else -2
     else:
         return error_cancel(payload)
-
     update_order(order["order_id"], {
         "status": new_status,
         "cancel_time": cancel_time,
@@ -497,7 +454,7 @@ def change_password(payload):
     return error_password(payload)
 
 ##############################
-# Ошибки
+# Функции формирования ошибок
 ##############################
 def error_invalid_json():
     return {
@@ -610,7 +567,7 @@ def error_password(payload):
     }
 
 ##############################
-# Основной callback endpoint
+# Основной callback endpoint (JSON-RPC)
 ##############################
 @app.route('/callback', methods=['POST'])
 def callback_endpoint():
@@ -627,7 +584,7 @@ def callback_endpoint():
     logging.info("Headers: %s", dict(request.headers))
     logging.info("Payload: %s", payload)
 
-    # Авторизация через Basic Paycom:{MERCHANT_KEY}
+    # Авторизация через HTTP Basic (Paycom:MERCHANT_KEY)
     auth_header = request.headers.get("Authorization", "")
     expected = "Basic " + base64.b64encode(f"Paycom:{MERCHANT_KEY}".encode()).decode()
     if auth_header.strip() != expected.strip():
