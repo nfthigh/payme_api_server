@@ -13,11 +13,11 @@ import psycopg2.extras
 load_dotenv()
 
 # Для Click сервер оставляем MERCHANT_ID (не меняем его), а для PayMe используем отдельную переменную
-PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")  # новое значение для PayMe
+PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")  # значение для PayMe
 MERCHANT_KEY = os.getenv("MERCHANT_KEY")
 # Остальные переменные, используемые в PayMe-сервисе:
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
-CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")  # убедитесь, что эта переменная определена!
+CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")  # должна быть задана
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = Flask(__name__)
@@ -36,21 +36,45 @@ def get_db():
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-    # Создаем таблицу для PayMe с отдельными именами столбцов
+    # Создаем таблицу orders с полной схемой, совпадающей с ботом.
     create_table_query = """
     CREATE TABLE IF NOT EXISTS orders (
-        order_id TEXT PRIMARY KEY,
-        payment_amount INTEGER NOT NULL,
+        order_id SERIAL PRIMARY KEY,
+        user_id BIGINT,
+        merchant_trans_id TEXT,
+        product TEXT,
+        quantity INTEGER,
+        design_text TEXT,
+        design_photo TEXT,
+        location_lat REAL,
+        location_lon REAL,
         status TEXT NOT NULL,
-        create_time BIGINT,
-        perform_time BIGINT,
-        cancel_time BIGINT,
-        transaction_id TEXT,
-        cancel_reason TEXT,
+        payment_amount INTEGER,
+        order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        delivery_comment TEXT,
         items TEXT
     );
     """
     cur.execute(create_table_query)
+    conn.commit()
+    # Если таблица уже существует, добавляем недостающие столбцы:
+    alter_queries = [
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id BIGINT;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS merchant_trans_id TEXT;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS product TEXT;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS quantity INTEGER;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS design_text TEXT;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS design_photo TEXT;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS location_lat REAL;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS location_lon REAL;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_comment TEXT;"
+    ]
+    for query in alter_queries:
+        try:
+            cur.execute(query)
+        except Exception as e:
+            logging.error("Ошибка ALTER TABLE: %s", e)
     conn.commit()
     cur.close()
     conn.close()
@@ -61,13 +85,11 @@ def current_timestamp():
     return int(round(time.time() * 1000))
 
 # ============================================================================
-# Новый маршрут для GET-запросов по /payment
-# Этот маршрут генерирует HTML-форму для оплаты и используется при переходе
-# по сформированной ссылке из бота (например, при выборе оплаты через PayMe).
+# Маршрут для GET-запросов по /payment (отдает HTML-форму)
 # ============================================================================
 @app.route('/payment', methods=['GET'])
 def payment_form():
-    order_id = request.args.get("order_id", "")
+    order_id_param = request.args.get("order_id", "")
     amount = request.args.get("amount", "")
     merchant = request.args.get("merchant", "")
     callback = request.args.get("callback", "")
@@ -75,7 +97,7 @@ def payment_form():
     description = request.args.get("description", "Оплата заказа")
     signature = request.args.get("signature", "")
     
-    # Если параметр callback отсутствует или равен "None", используем CALLBACK_BASE_URL из окружения
+    # Если callback отсутствует или равен "None", используем CALLBACK_BASE_URL
     if not callback or callback.lower() == "none":
         callback = CALLBACK_BASE_URL if CALLBACK_BASE_URL else ""
     
@@ -88,7 +110,7 @@ def payment_form():
 <body>
     <h1>Оплата за заказ</h1>
     <form action="{CHECKOUT_URL}" method="POST">
-        <input type="hidden" name="account[order_id]" value="{order_id}">
+        <input type="hidden" name="account[order_id]" value="{order_id_param}">
         <input type="hidden" name="amount" value="{amount}">
         <input type="hidden" name="merchant" value="{merchant}">
         <input type="hidden" name="callback" value="{callback}">
@@ -97,7 +119,7 @@ def payment_form():
         <input type="hidden" name="signature" value="{signature}">
         <button type="submit">Оплатить</button>
     </form>
-    <p>Order ID: {order_id}</p>
+    <p>Order ID (merchant_trans_id): {order_id_param}</p>
 </body>
 </html>"""
     return html_form
@@ -185,19 +207,21 @@ def error_authorization(payload):
 # ============================================================================
 # Функции работы с базой данных
 # ============================================================================
-def get_order_by_id(order_id):
+# Получаем заказ по полю merchant_trans_id (UUID, используемый для платежей)
+def get_order_by_merchant_trans_id(merchant_trans_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM orders WHERE order_id = %s", (order_id,))
+    cur.execute("SELECT * FROM orders WHERE merchant_trans_id = %s", (merchant_trans_id,))
     order = cur.fetchone()
     cur.close()
     conn.close()
     return order
 
-def get_order_by_transaction(transaction_id):
+# Если требуется получить заказ по order_id (целое число), можно оставить функцию get_order_by_id.
+def get_order_by_id(order_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM orders WHERE transaction_id = %s", (transaction_id,))
+    cur.execute("SELECT * FROM orders WHERE order_id = %s", (order_id,))
     order = cur.fetchone()
     cur.close()
     conn.close()
@@ -216,15 +240,15 @@ def update_order(order_id, fields):
     conn.close()
 
 # ============================================================================
-# Основная бизнес-логика PayMe
+# Основная бизнес-логика PayMe (используем поиск по merchant_trans_id)
 # ============================================================================
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
-    order_id = account.get("order_id")
-    if order_id is None:
+    merchant_trans_id = account.get("order_id")  # здесь order_id содержит UUID (merchant_trans_id)
+    if merchant_trans_id is None:
         return error_order_id(payload)
-    order = get_order_by_id(order_id)
+    order = get_order_by_merchant_trans_id(merchant_trans_id)
     if not order:
         return error_order_id(payload)
     if order["payment_amount"] != params.get("amount"):
@@ -234,7 +258,7 @@ def check_perform_transaction(payload):
         {
             "discount": 0,
             "title": "Кружка",
-            "price": 100000,  # 1000 сум = 100000 тийинов
+            "price": 100000,
             "count": 1,
             "code": "06912001036000000",
             "units": 796,
@@ -257,10 +281,10 @@ def check_perform_transaction(payload):
 def create_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
-    order_id = account.get("order_id")
-    if order_id is None:
+    merchant_trans_id = account.get("order_id")
+    if merchant_trans_id is None:
         return error_order_id(payload)
-    order = get_order_by_id(order_id)
+    order = get_order_by_merchant_trans_id(merchant_trans_id)
     if not order:
         return error_order_id(payload)
     if order["payment_amount"] != params.get("amount"):
@@ -268,7 +292,7 @@ def create_transaction(payload):
     transaction_id = params.get("id")
     if order["status"] == "pending":
         create_time = current_timestamp()
-        update_order(order_id, {
+        update_order(order["order_id"], {
             "status": "processing",
             "create_time": create_time,
             "transaction_id": transaction_id
@@ -277,7 +301,7 @@ def create_transaction(payload):
             "id": payload.get("id"),
             "result": {
                 "create_time": create_time,
-                "transaction": "000" + order_id,
+                "transaction": "000" + str(order["order_id"]),
                 "state": 1
             }
         }
@@ -287,7 +311,7 @@ def create_transaction(payload):
                 "id": payload.get("id"),
                 "result": {
                     "create_time": order.get("create_time"),
-                    "transaction": "000" + order_id,
+                    "transaction": "000" + str(order["order_id"]),
                     "state": 1
                 }
             }
@@ -312,7 +336,7 @@ def perform_transaction(payload):
         return {
             "id": payload.get("id"),
             "result": {
-                "transaction": "000" + order_id,
+                "transaction": "000" + str(order_id),
                 "perform_time": perform_time,
                 "state": 2
             }
@@ -321,7 +345,7 @@ def perform_transaction(payload):
         return {
             "id": payload.get("id"),
             "result": {
-                "transaction": "000" + order_id,
+                "transaction": "000" + str(order_id),
                 "perform_time": order.get("perform_time"),
                 "state": 2
             }
@@ -341,13 +365,13 @@ def check_transaction(payload):
     if order.get("transaction_id") != transaction_id:
         return error_transaction(payload)
     if order["status"] == "processing":
-        state = 1
+        state_val = 1
     elif order["status"] == "completed":
-        state = 2
+        state_val = 2
     elif order["status"] == "cancelled":
-        state = -1
+        state_val = -1
     elif order["status"] == "refunded":
-        state = -2
+        state_val = -2
     else:
         return error_transaction(payload)
     return {
@@ -356,8 +380,8 @@ def check_transaction(payload):
             "create_time": order.get("create_time", 0),
             "perform_time": order.get("perform_time", 0),
             "cancel_time": order.get("cancel_time", 0),
-            "transaction": "000" + order_id,
-            "state": state,
+            "transaction": "000" + str(order_id),
+            "state": state_val,
             "reason": order.get("cancel_reason")
         },
         "error": None
@@ -375,13 +399,13 @@ def cancel_transaction(payload):
     cancel_time = current_timestamp()
     if order["status"] in ["pending", "processing"]:
         new_status = "cancelled"
-        state = -1
+        state_val = -1
     elif order["status"] == "completed":
         new_status = "refunded"
-        state = -2
+        state_val = -2
     elif order["status"] in ["cancelled", "refunded"]:
         cancel_time = order.get("cancel_time", cancel_time)
-        state = -1 if order["status"] == "cancelled" else -2
+        state_val = -1 if order["status"] == "cancelled" else -2
     else:
         return error_cancel(payload)
     update_order(order_id, {
@@ -392,9 +416,9 @@ def cancel_transaction(payload):
     return {
         "id": payload.get("id"),
         "result": {
-            "transaction": "000" + order_id,
+            "transaction": "000" + str(order_id),
             "cancel_time": cancel_time,
-            "state": state
+            "state": state_val
         }
     }
 
