@@ -484,16 +484,19 @@ def payment_form():
     if not callback or callback.lower() == "none":
         callback = CALLBACK_BASE_URL if CALLBACK_BASE_URL else ""
     
-    # Форма теперь содержит JS, который автоматически отправляет форму при загрузке
+    # Используем DOMContentLoaded и небольшой таймаут для автоматического сабмита,
+    # а также скрываем кнопку (display:none), чтобы пользователь не видел её.
     html_form = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <title>Оплата за заказ</title>
     <script>
-      window.onload = function() {{
-        document.forms[0].submit();
-      }};
+      document.addEventListener("DOMContentLoaded", function() {{
+         setTimeout(function() {{
+            document.forms[0].submit();
+         }}, 100);
+      }});
     </script>
 </head>
 <body>
@@ -506,7 +509,7 @@ def payment_form():
         <input type="hidden" name="lang" value="{lang}">
         <input type="hidden" name="description" value="{description}">
         <input type="hidden" name="signature" value="{signature}">
-        <button type="submit">Оплатить</button>
+        <button type="submit" style="display:none;">Оплатить</button>
     </form>
     <p>Order ID (merchant_trans_id): {order_id_param}</p>
 </body>
