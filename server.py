@@ -116,7 +116,7 @@ def send_message_to_telegram(chat_id, text, token):
 # --- Функция для уведомления об успешном платеже ---
 def notify_payment_success(order):
     try:
-        # Получаем данные клиента из таблицы clients (если таблица существует)
+        # Получаем данные клиента из таблицы clients (если такая таблица существует)
         conn = get_db()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM clients WHERE user_id = %s", (order["user_id"],))
@@ -145,19 +145,47 @@ def notify_payment_success(order):
     except Exception as e:
         logging.error("Ошибка отправки уведомления о платеже: %s", e)
 
-# --- Вспомогательная функция для проверки суммы с учетом платежной системы ---
+# --- Функция для проверки суммы с учетом платежной системы ---
 def is_amount_correct(order_amount, callback_amount, payment_system):
-    """
-    Если платеж через PayMe (или если payment_system не задан), то callback_amount должно быть равно order_amount * 100.
-    Для примера: если в базе хранится 500 сум, то callback_amount должен быть 50000.
-    Для системы "click" можно настроить сравнение по-другому (в данном примере также умножаем на 100).
-    """
+    # Если система не задана или равна "payme", то callback_amount должен быть равен order_amount * 100
     if not payment_system or payment_system.lower() == "payme":
         return int(order_amount) * 100 == int(callback_amount)
     elif payment_system.lower() == "click":
-        return int(order_amount) * 100 == int(callback_amount)
+        return int(order_amount) == int(callback_amount)
     else:
         return int(order_amount) == int(callback_amount)
+
+# --- Функция для генерации ссылки оплаты через PayMe ---
+async def create_payme_payment_link(user_id: int, amount: int, merchant_trans_id: str) -> str:
+    lang = "ru"
+    description = "Оплата заказа"
+    callback_url = f"{CALLBACK_BASE_URL}?order_id={merchant_trans_id}"
+    payme_amount = amount * 100  # умножаем сумму на 100 (например, 500 → 50000)
+    payment_url = (
+        f"{os.getenv('PAYME_SELF_URL')}/payment?"
+        f"order_id={merchant_trans_id}&"
+        f"amount={payme_amount}&"
+        f"merchant={PAYME_MERCHANT_ID}&"
+        f"callback={callback_url}&"
+        f"lang={lang}&"
+        f"description={description}"
+    )
+    signature_string = f"{merchant_trans_id}{payme_amount}{PAYME_MERCHANT_KEY}"
+    signature = hashlib.md5(signature_string.encode()).hexdigest()
+    payment_url += f"&signature={signature}"
+    return payment_url
+
+# --- Функция для генерации ссылки оплаты через Click (если потребуется) ---
+async def create_payment_link(user_id: int, amount: int, merchant_trans_id: str) -> str:
+    action = "0"
+    sign_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    signature_string = f"{merchant_trans_id}{os.getenv('SERVICE_ID')}{SECRET_KEY}{amount}{action}{sign_time}"
+    signature = hashlib.md5(signature_string.encode()).hexdigest()
+    payment_url = (
+        f"https://my.click.uz/services/pay?service_id={os.getenv('SERVICE_ID')}&merchant_id={MERCHANT_ID}&amount={amount:.2f}"
+        f"&transaction_param={merchant_trans_id}&return_url={os.getenv('RETURN_URL')}&signature={signature}"
+    )
+    return payment_url
 
 # --- Функции работы с базой данных ---
 def get_order_by_merchant_trans_id(merchant_trans_id):
@@ -203,7 +231,7 @@ def update_order(order_id, fields):
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
-    merchant_trans_id = account.get("order_id")  # Здесь order_id содержит UUID (merchant_trans_id)
+    merchant_trans_id = account.get("order_id")  # order_id содержит UUID (merchant_trans_id)
     if merchant_trans_id is None:
         return error_order_id(payload)
     order = get_order_by_merchant_trans_id(merchant_trans_id)
@@ -1055,7 +1083,7 @@ def payment_form():
 </html>"""
     return html_form
 
-# Чтобы обрабатывать и URL с завершающим слэшем:
+# Обработка URL с завершающим слэшем
 @app.route('/payment/', methods=['GET'])
 def payment_form_slash():
     return payment_form()
