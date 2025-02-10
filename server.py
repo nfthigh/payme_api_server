@@ -99,6 +99,11 @@ init_db()
 def current_timestamp():
     return int(round(time.time() * 1000))
 
+# Новый обработчик для корневого маршрута
+@app.route('/', methods=['GET'])
+def index():
+    return "Service is live 🎉", 200
+
 # Функция для отправки сообщения через Telegram Bot API
 def send_message_to_telegram(chat_id, text, token):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
