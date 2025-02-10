@@ -22,7 +22,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Для уведомлений через Telegram:
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")  # Идентификатор группы администраторов (если используется)
+GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")  # Идентификатор группы администраторов
 
 app = Flask(__name__)
 
@@ -40,7 +40,7 @@ def get_db():
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-    # Создаем таблицу orders с полной схемой, совпадающей с ботом
+    # Создаем таблицу orders с полной схемой (совместимой с ботом)
     create_table_query = """
     CREATE TABLE IF NOT EXISTS orders (
         order_id SERIAL PRIMARY KEY,
@@ -132,7 +132,6 @@ def notify_payment_success(order):
             send_message_to_telegram(GROUP_CHAT_ID, message_text, TELEGRAM_BOT_TOKEN)
     except Exception as e:
         logging.error("Ошибка отправки уведомления о платеже: %s", e)
-# ============================================================================
 
 # ============================================================================
 # Маршрут для GET-запросов по /payment – отдает HTML-форму
@@ -289,7 +288,7 @@ def update_order(order_id, fields):
 # ============================================================================
 
 # ============================================================================
-# Основная бизнес-логика PayMe (поиск по merchant_trans_id)
+# Основная бизнес-логика PayMe (используем поиск по merchant_trans_id)
 # ============================================================================
 def check_perform_transaction(payload):
     params = payload.get("params", {})
@@ -302,12 +301,12 @@ def check_perform_transaction(payload):
         return error_order_id(payload)
     if order["payment_amount"] != params.get("amount"):
         return error_amount(payload)
-    # Заглушка для товара "Кружка"
+    # Формируем receipt с суммой, равной сохраненной в заказе (без преобразования)
     stub_items = [
         {
             "discount": 0,
             "title": "Кружка",
-            "price": 100000,
+            "price": order["payment_amount"],
             "count": 1,
             "code": "06912001036000000",
             "units": 796,
@@ -339,7 +338,8 @@ def create_transaction(payload):
     if order["payment_amount"] != params.get("amount"):
         return error_amount(payload)
     transaction_id = params.get("id")
-    if order["status"] == "pending":
+    # Изменяем условие: если статус заказа равен "pending" или "Одобрен", создаём транзакцию
+    if order["status"] in ["pending", "Одобрен"]:
         create_time = current_timestamp()
         update_order(order["order_id"], {
             "status": "processing",
@@ -372,6 +372,8 @@ def create_transaction(payload):
 def perform_transaction(payload):
     params = payload.get("params", {})
     transaction_id = params.get("id")
+    # Здесь поиск заказа по транзакции можно реализовать аналогично (предполагается, что функция get_order_by_transaction уже есть)
+    # Для краткости, используем get_order_by_id после обновления, если transaction_id соответствует.
     order = get_order_by_transaction(transaction_id)
     if not order:
         return error_transaction(payload)
@@ -382,7 +384,7 @@ def perform_transaction(payload):
             "status": "completed",
             "perform_time": perform_time
         })
-        # После обновления, получаем обновленный заказ и отправляем уведомление
+        # После успешного обновления, получаем обновленный заказ и отправляем уведомление
         updated_order = get_order_by_id(order_id)
         notify_payment_success(updated_order)
         return {
