@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 
-# Загружаем переменные окружения из .env
+# Загружаем переменные окружения из файла .env
 load_dotenv()
 
 MERCHANT_ID = os.getenv("MERCHANT_ID")
@@ -17,15 +17,28 @@ MERCHANT_KEY = os.getenv("MERCHANT_KEY")
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
 CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
-SELF_URL = os.getenv("SELF_URL")  # Если потребуется (обычно сервер сам развернут на нужном домене)
+SELF_URL = os.getenv("SELF_URL")  # Обычно URL payme-сервера
 
 app = Flask(__name__)
 
+# Настраиваем базовое логирование в консоль
 logging.basicConfig(
     stream=sys.stdout,
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+# Логирование каждого запроса
+@app.before_request
+def log_request_info():
+    app.logger.info("Request: %s %s", request.method, request.url)
+    app.logger.info("Headers: %s", request.headers)
+    app.logger.info("Body: %s", request.get_data())
+
+# Корневой маршрут для проверки работы сервера
+@app.route('/', methods=['GET'])
+def index():
+    return "Payme API Server is running.", 200
 
 def get_db():
     conn = psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -52,9 +65,9 @@ def init_db():
         conn.commit()
         cur.close()
         conn.close()
-        logging.info("Таблица payme_orders успешно создана или уже существует.")
+        app.logger.info("Таблица payme_orders успешно создана или уже существует.")
     except Exception as e:
-        logging.error("Ошибка при инициализации базы данных: %s", e)
+        app.logger.error("Ошибка при инициализации базы данных: %s", e)
 
 init_db()
 
@@ -62,6 +75,7 @@ def current_timestamp():
     return int(round(time.time() * 1000))
 
 # Функции формирования ошибок
+
 def error_invalid_json():
     return {
         "error": {"code": -32700, "message": {"ru": "Could not parse JSON", "uz": "Could not parse JSON", "en": "Could not parse JSON"}, "data": None},
@@ -140,6 +154,7 @@ def error_authorization(payload):
     }
 
 # Функции работы с базой данных для таблицы payme_orders
+
 def get_order_by_id(order_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -171,6 +186,7 @@ def update_order(order_id, fields):
     conn.close()
 
 # Основная бизнес-логика для Payme-заказов
+
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
@@ -330,23 +346,23 @@ def change_password(payload):
 def callback():
     try:
         raw_data = request.data.decode('utf-8')
-        logging.info("Received raw data: %s", raw_data)
+        app.logger.info("Received raw data: %s", raw_data)
         payload = json.loads(raw_data)
     except Exception as e:
-        logging.error("JSON parse error: %s", str(e))
+        app.logger.error("JSON parse error: %s", str(e))
         response = error_invalid_json()
-        logging.info("Response: %s", json.dumps(response))
+        app.logger.info("Response: %s", json.dumps(response))
         return jsonify(response)
     
-    logging.info("Headers: %s", dict(request.headers))
-    logging.info("Payload: %s", payload)
+    app.logger.info("Headers: %s", dict(request.headers))
+    app.logger.info("Payload: %s", payload)
     
     auth_header = request.headers.get("Authorization", "")
     expected_auth = "Basic " + base64.b64encode(f"Paycom:{MERCHANT_KEY}".encode()).decode()
     if auth_header.strip() != expected_auth.strip():
         response = error_authorization(payload)
-        logging.warning("Authorization failed. Provided: %s, Expected: %s", auth_header, expected_auth)
-        logging.info("Response: %s", json.dumps(response))
+        app.logger.warning("Authorization failed. Provided: %s, Expected: %s", auth_header, expected_auth)
+        app.logger.info("Response: %s", json.dumps(response))
         return jsonify(response)
     
     method = payload.get("method", "")
@@ -365,11 +381,11 @@ def callback():
     else:
         response = error_unknown_method(payload)
     
-    logging.info("Response: %s", json.dumps(response))
+    app.logger.info("Response: %s", json.dumps(response))
     return jsonify(response)
 
-# Новый маршрут для формирования HTML-формы оплаты через Payme.
-# При переходе по URL вида https://<ваш_payme-сервер>/payme/<order_id> клиент получает форму с автоперенаправлением на CHECKOUT_URL.
+# Маршрут для формирования HTML-формы оплаты через Payme.
+# Клиент переходит по URL: https://<SELF_URL>/payme/<order_id>
 @app.route('/payme/<order_id>', methods=['GET'])
 def payme_form(order_id):
     order = get_order_by_id(order_id)
