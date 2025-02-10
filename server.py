@@ -82,7 +82,8 @@ def init_db():
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_comment TEXT;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS transaction_id TEXT;",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_system TEXT;"
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_system TEXT;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancel_reason TEXT;"  # Новый столбец
     ]
     for query in alter_queries:
         try:
