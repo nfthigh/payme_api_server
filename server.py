@@ -19,7 +19,7 @@ load_dotenv()
 PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")  # Например: 6758399fd33fb8548cede2a7
 MERCHANT_KEY = os.getenv("MERCHANT_KEY")            # Например: IA5W7ZF%&poyI9C#qXiIaijDsTSMaQ9S%GAT
 CHECKOUT_URL = os.getenv("CHECKOUT_URL", "https://checkout.paycom.uz")
-CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")    # Например: https://payme-api-server.onrender.com/callback
+CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")    # Должен быть, например: https://payme-api-server.onrender.com/callback
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Параметры для уведомлений через Telegram (если нужно)
@@ -232,7 +232,7 @@ def payment_form():
     # Если параметр callback отсутствует или равен "None", используем CALLBACK_BASE_URL
     callback = request.args.get("callback")
     if not callback or callback.lower() == "none":
-        callback = CALLBACK_BASE_URL or "https://defaultdomain.com/callback"
+        callback = CALLBACK_BASE_URL or "https://payme-api-server.onrender.com/callback"
     lang = request.args.get("lang", "ru")
     description = request.args.get("description", "Оплата заказа")
     html_form = f"""<!DOCTYPE html>
