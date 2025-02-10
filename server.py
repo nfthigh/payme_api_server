@@ -15,9 +15,9 @@ load_dotenv()
 # Для Click сервер оставляем MERCHANT_ID (не меняем его), а для PayMe используем отдельную переменную
 PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")  # новое значение для PayMe
 MERCHANT_KEY = os.getenv("MERCHANT_KEY")
-# Остальные переменные, используемые в PayMe‑сервисе:
+# Остальные переменные, используемые в PayMe-сервисе:
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
-CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")
+CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")  # убедитесь, что эта переменная определена!
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = Flask(__name__)
@@ -60,7 +60,51 @@ init_db()
 def current_timestamp():
     return int(round(time.time() * 1000))
 
-# --- Функции формирования ошибок ---
+# ============================================================================
+# Новый маршрут для GET-запросов по /payment
+# Этот маршрут генерирует HTML-форму для оплаты и используется при переходе
+# по сформированной ссылке из бота (например, при выборе оплаты через PayMe).
+# ============================================================================
+@app.route('/payment', methods=['GET'])
+def payment_form():
+    order_id = request.args.get("order_id", "")
+    amount = request.args.get("amount", "")
+    merchant = request.args.get("merchant", "")
+    callback = request.args.get("callback", "")
+    lang = request.args.get("lang", "ru")
+    description = request.args.get("description", "Оплата заказа")
+    signature = request.args.get("signature", "")
+    
+    # Если параметр callback отсутствует или равен "None", используем CALLBACK_BASE_URL из окружения
+    if not callback or callback.lower() == "none":
+        callback = CALLBACK_BASE_URL if CALLBACK_BASE_URL else ""
+    
+    html_form = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Оплата за заказ</title>
+</head>
+<body>
+    <h1>Оплата за заказ</h1>
+    <form action="{CHECKOUT_URL}" method="POST">
+        <input type="hidden" name="account[order_id]" value="{order_id}">
+        <input type="hidden" name="amount" value="{amount}">
+        <input type="hidden" name="merchant" value="{merchant}">
+        <input type="hidden" name="callback" value="{callback}">
+        <input type="hidden" name="lang" value="{lang}">
+        <input type="hidden" name="description" value="{description}">
+        <input type="hidden" name="signature" value="{signature}">
+        <button type="submit">Оплатить</button>
+    </form>
+    <p>Order ID: {order_id}</p>
+</body>
+</html>"""
+    return html_form
+
+# ============================================================================
+# Функции формирования ошибок
+# ============================================================================
 def error_invalid_json():
     return {
         "error": {"code": -32700, "message": {"ru": "Could not parse JSON", "uz": "Could not parse JSON", "en": "Could not parse JSON"}, "data": None},
@@ -138,7 +182,9 @@ def error_authorization(payload):
         "id": payload.get("id", 0)
     }
 
-# --- Функции работы с базой данных ---
+# ============================================================================
+# Функции работы с базой данных
+# ============================================================================
 def get_order_by_id(order_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -169,7 +215,9 @@ def update_order(order_id, fields):
     cur.close()
     conn.close()
 
-# --- Основная бизнес-логика PayMe ---
+# ============================================================================
+# Основная бизнес-логика PayMe
+# ============================================================================
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
@@ -186,7 +234,7 @@ def check_perform_transaction(payload):
         {
             "discount": 0,
             "title": "Кружка",
-            "price": 100000,
+            "price": 100000,  # 1000 сум = 100000 тийинов
             "count": 1,
             "code": "06912001036000000",
             "units": 796,
@@ -361,6 +409,9 @@ def change_password(payload):
         }
     return error_password(payload)
 
+# ============================================================================
+# Основной обработчик callback
+# ============================================================================
 @app.route('/callback', methods=['POST'])
 def callback():
     try:
