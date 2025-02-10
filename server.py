@@ -4,12 +4,15 @@ import time
 import base64
 import logging
 import sys
+import hashlib
 import requests
+from urllib.parse import unquote
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 
+# Загружаем переменные окружения
 load_dotenv()
 
 # Параметры Payme
@@ -30,6 +33,55 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+# Словарь с данными о товарах
+PRODUCTS_DATA = {
+    "Кружка": {
+        "SPIC": "06912001036000000",
+        "PackageCode": "1184747",
+        "CommissionInfo": {"TIN": "307022362"}
+    },
+    "Брелок": {
+        "SPIC": "07117001015000000",
+        "PackageCode": "1156259",
+        "CommissionInfo": {"TIN": "307022362"}
+    },
+    "Кепка": {
+        "SPIC": "06506001022000000",
+        "PackageCode": "1324746",
+        "CommissionInfo": {"TIN": "307022362"}
+    },
+    "Визитка": {
+        "SPIC": "04911001003000000",
+        "PackageCode": "1156221",
+        "CommissionInfo": {"TIN": "307022362"}
+    },
+    "Футболка": {
+        "SPIC": "06109001001000000",
+        "PackageCode": "1124331",
+        "CommissionInfo": {"TIN": "307022362"}
+    },
+    "Худи": {
+        "SPIC": "06212001012000000",
+        "PackageCode": "1238867",
+        "CommissionInfo": {"TIN": "307022362"}
+    },
+    "Пазл": {
+        "SPIC": "04811001019000000",
+        "PackageCode": "1748791",
+        "CommissionInfo": {"TIN": "307022362"}
+    },
+    "Камень": {
+        "SPIC": "04911001017000000",
+        "PackageCode": "1156234",
+        "CommissionInfo": {"TIN": "307022362"}
+    },
+    "Стакан": {
+        "SPIC": "07013001008000000",
+        "PackageCode": "1345854",
+        "CommissionInfo": {"TIN": "307022362"}
+    }
+}
 
 def get_db():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -188,12 +240,12 @@ def update_order(order_id, fields: dict):
 ##############################
 @app.route('/payment', methods=['GET'])
 def payment_form():
-    order_id_param = request.args.get("order_id","")
-    amount = request.args.get("amount","")
+    order_id_param = request.args.get("order_id", "")
+    amount = request.args.get("amount", "")
     merchant = request.args.get("merchant", PAYME_MERCHANT_ID)
     callback = request.args.get("callback", CALLBACK_BASE_URL)
-    lang = request.args.get("lang","ru")
-    description = request.args.get("description","Оплата заказа")
+    lang = request.args.get("lang", "ru")
+    description = request.args.get("description", "Оплата заказа")
 
     # Payme требует сумму в тийинах, 
     # если у вас amount в сумах, нужно умножать на 100 (по необходимости).
@@ -234,8 +286,8 @@ def is_amount_correct_in_sums_vs_tiyins(order_amount_sums: int, payme_amount_tiy
     return order_amount_sums * 100 == payme_amount_tiyins
 
 def check_perform_transaction(payload):
-    params = payload.get("params",{})
-    account = params.get("account",{})
+    params = payload.get("params", {})
+    account = params.get("account", {})
     merchant_trans_id = account.get("order_id")
     if not merchant_trans_id:
         return error_order_id(payload)
@@ -244,23 +296,29 @@ def check_perform_transaction(payload):
     if not order:
         return error_order_id(payload)
 
-    # В БД order["payment_amount"] храним в сумах
-    # В Payme params["amount"] = тийины
-    if not is_amount_correct_in_sums_vs_tiyins(order["payment_amount"], params.get("amount",0)):
+    # Проверка суммы: в БД хранится в сумах, от Payme приходит в тийинах
+    if not is_amount_correct_in_sums_vs_tiyins(order["payment_amount"], params.get("amount", 0)):
         return error_amount(payload)
 
-    # Можно здесь при желании собрать items
-    # Для демонстрации - заглушечный items:
-    # (или достать реальное product, qty, SKU)
+    # Получаем название товара из заказа
+    product = order.get("product", "Товар")
+    # Из словаря PRODUCTS_DATA получаем реальные данные для данного товара
+    product_data = PRODUCTS_DATA.get(product, {
+        "SPIC": "",
+        "PackageCode": "",
+        "CommissionInfo": {}
+    })
+
+    # Формируем items с реальными данными:
     items = [{
         "discount": 0,
-        "title": order.get("product","Товар"),
-        "price": order["payment_amount"]*100,  # в тийинах
-        "count": order.get("quantity",1),
-        "code": "06912001036000000",   # SKU/спик
-        "units": 796,
+        "title": product,                              # Название товара
+        "price": order["payment_amount"] * 100,          # Сумма в тийинах
+        "count": order.get("quantity", 1),
+        "code": product_data.get("SPIC", ""),            # SKU (из SPIC)
+        "units": 796,                                  # Единица измерения (примерное значение)
         "vat_percent": 12,
-        "package_code": "1184747"
+        "package_code": product_data.get("PackageCode", "")  # package_code из данных товара
     }]
 
     return {
@@ -276,8 +334,8 @@ def check_perform_transaction(payload):
     }
 
 def create_transaction(payload):
-    params = payload.get("params",{})
-    account = params.get("account",{})
+    params = payload.get("params", {})
+    account = params.get("account", {})
     merchant_trans_id = account.get("order_id")
     if not merchant_trans_id:
         return error_order_id(payload)
@@ -286,17 +344,15 @@ def create_transaction(payload):
     if not order:
         return error_order_id(payload)
 
-    # Сравниваем
-    if not is_amount_correct_in_sums_vs_tiyins(order["payment_amount"], params.get("amount",0)):
+    if not is_amount_correct_in_sums_vs_tiyins(order["payment_amount"], params.get("amount", 0)):
         return error_amount(payload)
 
     transaction_id = params.get("id")  # Payme id
-    # Логика статусов
-    if order["status"].lower() in ["pending","одобрен"]:
+    if order["status"].lower() in ["pending", "одобрен"]:
         create_time = current_timestamp()
         update_order(order["order_id"], {
-            "status":"processing",
-            "create_time":create_time,
+            "status": "processing",
+            "create_time": create_time,
             "transaction_id": transaction_id
         })
         return {
@@ -307,14 +363,14 @@ def create_transaction(payload):
                 "state": 1
             }
         }
-    elif order["status"].lower()=="processing":
-        if order.get("transaction_id")==transaction_id:
+    elif order["status"].lower() == "processing":
+        if order.get("transaction_id") == transaction_id:
             return {
                 "id": payload.get("id"),
-                "result":{
-                    "create_time": order.get("create_time",0),
-                    "transaction": "000"+str(order["order_id"]),
-                    "state":1
+                "result": {
+                    "create_time": order.get("create_time", 0),
+                    "transaction": "000" + str(order["order_id"]),
+                    "state": 1
                 }
             }
         else:
@@ -323,95 +379,94 @@ def create_transaction(payload):
         return error_unknown(payload)
 
 def perform_transaction(payload):
-    params = payload.get("params",{})
+    params = payload.get("params", {})
     transaction_id = params.get("id")
     order = get_order_by_transaction_id(transaction_id)
     if not order:
         return error_transaction(payload)
 
-    if order["status"].lower()=="processing":
+    if order["status"].lower() == "processing":
         perform_time = current_timestamp()
         update_order(order["order_id"], {
-            "status":"completed",
-            "perform_time":perform_time
+            "status": "completed",
+            "perform_time": perform_time
         })
-        # Уведомляем об успешной оплате
         updated_order = get_order_by_id(order["order_id"])
         notify_payment_success(updated_order)
         return {
             "id": payload.get("id"),
-            "result":{
-                "transaction":"000"+str(order["order_id"]),
-                "perform_time":perform_time,
-                "state":2
+            "result": {
+                "transaction": "000" + str(order["order_id"]),
+                "perform_time": perform_time,
+                "state": 2
             }
         }
-    elif order["status"].lower()=="completed":
+    elif order["status"].lower() == "completed":
         return {
             "id": payload.get("id"),
-            "result":{
-                "transaction":"000"+str(order["order_id"]),
-                "perform_time": order.get("perform_time",0),
-                "state":2
+            "result": {
+                "transaction": "000" + str(order["order_id"]),
+                "perform_time": order.get("perform_time", 0),
+                "state": 2
             }
         }
-    elif order["status"].lower() in ["cancelled","refunded"]:
+    elif order["status"].lower() in ["cancelled", "refunded"]:
         return error_cancelled_transaction(payload)
     else:
         return error_unknown(payload)
 
 def check_transaction(payload):
-    params = payload.get("params",{})
+    params = payload.get("params", {})
     tid = params.get("id")
     order = get_order_by_transaction_id(tid)
     if not order:
         return error_transaction(payload)
-    if order.get("transaction_id")!= tid:
+    if order.get("transaction_id") != tid:
         return error_transaction(payload)
 
-    if order["status"].lower()=="processing":
-        state=1
-    elif order["status"].lower()=="completed":
-        state=2
-    elif order["status"].lower()=="cancelled":
-        state=-1
-    elif order["status"].lower()=="refunded":
-        state=-2
+    if order["status"].lower() == "processing":
+        state = 1
+    elif order["status"].lower() == "completed":
+        state = 2
+    elif order["status"].lower() == "cancelled":
+        state = -1
+    elif order["status"].lower() == "refunded":
+        state = -2
     else:
         return error_transaction(payload)
 
     return {
         "id": payload.get("id"),
-        "result":{
-            "create_time": order.get("create_time",0),
-            "perform_time": order.get("perform_time",0),
-            "cancel_time": order.get("cancel_time",0),
-            "transaction":"000"+str(order["order_id"]),
-            "state":state,
+        "result": {
+            "create_time": order.get("create_time", 0),
+            "perform_time": order.get("perform_time", 0),
+            "cancel_time": order.get("cancel_time", 0),
+            "transaction": "000" + str(order["order_id"]),
+            "state": state,
             "reason": order.get("cancel_reason")
         },
-        "error":None
+        "error": None
     }
 
 def cancel_transaction(payload):
-    params = payload.get("params",{})
+    params = payload.get("params", {})
     tid = params.get("id")
     order = get_order_by_transaction_id(tid)
     if not order:
         return error_transaction(payload)
-    if order.get("transaction_id")!= tid:
+    if order.get("transaction_id") != tid:
         return error_transaction(payload)
 
     cancel_time = current_timestamp()
-    if order["status"].lower() in ["pending","processing","одобрен"]:
+    if order["status"].lower() in ["pending", "processing", "одобрен"]:
         new_status = "cancelled"
         state_val = -1
-    elif order["status"].lower()=="completed":
+    elif order["status"].lower() == "completed":
         new_status = "refunded"
         state_val = -2
-    elif order["status"].lower() in ["cancelled","refunded"]:
-        cancel_time = order.get("cancel_time",cancel_time)
-        state_val = -1 if order["status"].lower()=="cancelled" else -2
+    elif order["status"].lower() in ["cancelled", "refunded"]:
+        cancel_time = order.get("cancel_time", cancel_time)
+        state_val = -1 if order["status"].lower() == "cancelled" else -2
     else:
         return error_cancel(payload)
 
@@ -422,22 +477,21 @@ def cancel_transaction(payload):
     })
     return {
         "id": payload.get("id"),
-        "result":{
-            "transaction":"000"+str(order["order_id"]),
+        "result": {
+            "transaction": "000" + str(order["order_id"]),
             "cancel_time": cancel_time,
             "state": state_val
         }
     }
 
 def change_password(payload):
-    params = payload.get("params",{})
+    params = payload.get("params", {})
     new_pass = params.get("password")
     if new_pass != MERCHANT_KEY:
-        # Если пароль не совпадает - считаем, что "обновили"
         return {
             "id": payload.get("id"),
-            "result":{"success":True},
-            "error":None
+            "result": {"success": True},
+            "error": None
         }
     return error_password(payload)
 
@@ -446,135 +500,119 @@ def change_password(payload):
 ##############################
 def error_invalid_json():
     return {
-        "error":{
-            "code":-32700,
-            "message":{"ru":"Could not parse JSON","uz":"Could not parse JSON","en":"Could not parse JSON"}
+        "error": {
+            "code": -32700,
+            "message": {"ru": "Could not parse JSON", "uz": "Could not parse JSON", "en": "Could not parse JSON"}
         },
-        "id":0
+        "id": 0
     }
 
 def error_authorization(payload):
     return {
-        "error":{
-            "code":-32504,
-            "message":{"ru":"Error during authorization","en":"Error during authorization","uz":"Error during authorization"},
-            "data":None
+        "error": {
+            "code": -32504,
+            "message": {"ru": "Error during authorization", "en": "Error during authorization", "uz": "Error during authorization"},
+            "data": None
         },
         "id": payload.get("id", 0)
     }
 
 def error_unknown_method(payload):
     return {
-        "error":{
-            "code":-32601,
-            "message":{"ru":"Unknown method","en":"Unknown method","uz":"Unknown method"},
-            "data":payload.get("method","")
+        "error": {
+            "code": -32601,
+            "message": {"ru": "Unknown method", "en": "Unknown method", "uz": "Unknown method"},
+            "data": payload.get("method", "")
         },
         "id": payload.get("id", 0)
     }
 
 def error_order_id(payload):
     return {
-        "error":{
-            "code":-31099,
-            "message":{
-                "ru":"Order number cannot be found","uz":"Order number cannot be found","en":"Order number cannot be found"
-            },
-            "data":"order"
+        "error": {
+            "code": -31099,
+            "message": {"ru": "Order number cannot be found", "uz": "Order number cannot be found", "en": "Order number cannot be found"},
+            "data": "order"
         },
         "id": payload.get("id", 0)
     }
 
 def error_amount(payload):
     return {
-        "error":{
-            "code":-31001,
-            "message":{
-                "ru":"Order amount is incorrect","uz":"Order amount is incorrect","en":"Order amount is incorrect"
-            },
-            "data":"amount"
+        "error": {
+            "code": -31001,
+            "message": {"ru": "Order amount is incorrect", "uz": "Order amount is incorrect", "en": "Order amount is incorrect"},
+            "data": "amount"
         },
-        "id":payload.get("id", 0)
+        "id": payload.get("id", 0)
     }
 
 def error_has_another_transaction(payload):
     return {
-        "error":{
-            "code":-31099,
-            "message":{
-                "ru":"Other transaction for this order is in progress","en":"Other transaction for this order is in progress","uz":"Other transaction for this order is in progress"
-            },
-            "data":"order"
+        "error": {
+            "code": -31099,
+            "message": {"ru": "Other transaction for this order is in progress", "en": "Other transaction for this order is in progress", "uz": "Other transaction for this order is in progress"},
+            "data": "order"
         },
-        "id":payload.get("id",0)
+        "id": payload.get("id", 0)
     }
 
 def error_unknown(payload):
     return {
-        "error":{
-            "code":-31008,
-            "message":{
-                "ru":"Unknown error","en":"Unknown error","uz":"Unknown error"
-            },
-            "data":None
+        "error": {
+            "code": -31008,
+            "message": {"ru": "Unknown error", "en": "Unknown error", "uz": "Unknown error"},
+            "data": None
         },
-        "id":payload.get("id",0)
+        "id": payload.get("id", 0)
     }
 
 def error_transaction(payload):
     return {
-        "error":{
-            "code":-31003,
-            "message":{
-                "ru":"Transaction number is wrong","en":"Transaction number is wrong","uz":"Transaction number is wrong"
-            },
-            "data":"id"
+        "error": {
+            "code": -31003,
+            "message": {"ru": "Transaction number is wrong", "en": "Transaction number is wrong", "uz": "Transaction number is wrong"},
+            "data": "id"
         },
-        "id":payload.get("id",0)
+        "id": payload.get("id", 0)
     }
 
 def error_cancelled_transaction(payload):
     return {
-        "error":{
-            "code":-31008,
-            "message":{
-                "ru":"Transaction was cancelled or refunded","en":"Transaction was cancelled or refunded","uz":"Transaction was cancelled or refunded"
-            },
-            "data":"order"
+        "error": {
+            "code": -31008,
+            "message": {"ru": "Transaction was cancelled or refunded", "en": "Transaction was cancelled or refunded", "uz": "Transaction was cancelled or refunded"},
+            "data": "order"
         },
-        "id":payload.get("id",0)
+        "id": payload.get("id", 0)
     }
 
 def error_cancel(payload):
     return {
-        "error":{
-            "code":-31007,
-            "message":{
-                "ru":"It is impossible to cancel. The order is completed","en":"It is impossible to cancel. The order is completed","uz":"It is impossible to cancel. The order is completed"
-            },
-            "data":"order"
+        "error": {
+            "code": -31007,
+            "message": {"ru": "It is impossible to cancel. The order is completed", "en": "It is impossible to cancel. The order is completed", "uz": "It is impossible to cancel. The order is completed"},
+            "data": "order"
         },
-        "id":payload.get("id",0)
+        "id": payload.get("id", 0)
     }
 
 def error_password(payload):
     return {
-        "error":{
-            "code":-32400,
-            "message":{
-                "ru":"Cannot change the password","en":"Cannot change the password","uz":"Cannot change the password"
-            },
-            "data":"password"
+        "error": {
+            "code": -32400,
+            "message": {"ru": "Cannot change the password", "en": "Cannot change the password", "uz": "Cannot change the password"},
+            "data": "password"
         },
-        "result":None,
-        "id":payload.get("id",0)
+        "result": None,
+        "id": payload.get("id", 0)
     }
 
 ##############################
 # Основной callback endpoint
 ##############################
 @app.route('/callback', methods=['POST'])
-def callback():
+def callback_endpoint():
     try:
         raw_data = request.data.decode('utf-8')
         logging.info("Received raw data: %s", raw_data)
@@ -589,7 +627,7 @@ def callback():
     logging.info("Payload: %s", payload)
 
     # Авторизация через Basic Paycom:{MERCHANT_KEY}
-    auth_header = request.headers.get("Authorization","")
+    auth_header = request.headers.get("Authorization", "")
     expected = "Basic " + base64.b64encode(f"Paycom:{MERCHANT_KEY}".encode()).decode()
     if auth_header.strip() != expected.strip():
         resp = error_authorization(payload)
@@ -597,18 +635,18 @@ def callback():
         logging.info("Response: %s", resp)
         return jsonify(resp), 200
 
-    method = payload.get("method","")
-    if method=="CheckPerformTransaction":
+    method = payload.get("method", "")
+    if method == "CheckPerformTransaction":
         resp = check_perform_transaction(payload)
-    elif method=="CreateTransaction":
+    elif method == "CreateTransaction":
         resp = create_transaction(payload)
-    elif method=="PerformTransaction":
+    elif method == "PerformTransaction":
         resp = perform_transaction(payload)
-    elif method=="CheckTransaction":
+    elif method == "CheckTransaction":
         resp = check_transaction(payload)
-    elif method=="CancelTransaction":
+    elif method == "CancelTransaction":
         resp = cancel_transaction(payload)
-    elif method=="ChangePassword":
+    elif method == "ChangePassword":
         resp = change_password(payload)
     else:
         resp = error_unknown_method(payload)
@@ -616,6 +654,6 @@ def callback():
     logging.info("Response: %s", json.dumps(resp))
     return jsonify(resp), 200
 
-if __name__=='__main__':
+if __name__ == '__main__':
     port = int(os.environ.get("PORT", "5000"))
     app.run(host='0.0.0.0', port=port)
