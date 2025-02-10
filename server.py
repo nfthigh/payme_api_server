@@ -4,6 +4,7 @@ import time
 import base64
 import logging
 import sys
+import requests  # Для отправки уведомлений через Telegram Bot API
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import psycopg2
@@ -12,13 +13,16 @@ import psycopg2.extras
 # Загружаем переменные окружения из файла .env
 load_dotenv()
 
-# Для Click сервер оставляем MERCHANT_ID (не меняем его), а для PayMe используем отдельную переменную
+# Для Click оставляем MERCHANT_ID (не используется здесь), а для PayMe – отдельные переменные:
 PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")  # значение для PayMe
 MERCHANT_KEY = os.getenv("MERCHANT_KEY")
-# Остальные переменные, используемые в PayMe-сервисе:
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
 CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")  # должна быть задана
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Для уведомлений через Telegram:
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")  # Идентификатор группы администраторов (если используется)
 
 app = Flask(__name__)
 
@@ -36,7 +40,7 @@ def get_db():
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-    # Создаем таблицу orders с полной схемой, совпадающей с ботом.
+    # Создаем таблицу orders с полной схемой, совпадающей с ботом
     create_table_query = """
     CREATE TABLE IF NOT EXISTS orders (
         order_id SERIAL PRIMARY KEY,
@@ -85,8 +89,53 @@ def current_timestamp():
     return int(round(time.time() * 1000))
 
 # ============================================================================
-# Маршрут для GET-запросов по /payment (отдает HTML-форму)
+# Функция для отправки сообщения через Telegram Bot API
+def send_message_to_telegram(chat_id, text, token):
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        logging.info("Уведомление отправлено: %s", response.json())
+    except Exception as e:
+        logging.error("Ошибка отправки сообщения в Telegram: %s", e)
+
+# Функция для формирования и отправки уведомления о платеже
+def notify_payment_success(order):
+    try:
+        # Получаем данные клиента из таблицы clients
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM clients WHERE user_id = %s", (order["user_id"],))
+        client = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if client:
+            client_info = (f"Клиент: {client.get('name', 'Неизвестный')} "
+                           f"(@{client.get('username', 'нет')})\nТелефон: {client.get('contact', 'не указан')}")
+        else:
+            client_info = "Данные клиента не найдены"
+
+        message_text = (
+            f"✅ Оплата заказа №{order['order_id']} успешно проведена!\n\n"
+            f"{client_info}\n\n"
+            f"Товар: {order.get('product', 'не указан')}\n"
+            f"Количество: {order.get('quantity', 'не указано')}\n"
+            f"Сумма: {order.get('payment_amount', '0')} сум\n"
+            f"Комментарий к доставке: {order.get('delivery_comment', '')}"
+        )
+
+        # Отправляем сообщение клиенту
+        send_message_to_telegram(order["user_id"], message_text, TELEGRAM_BOT_TOKEN)
+        # Отправляем сообщение в группу администраторов (если задан GROUP_CHAT_ID)
+        if GROUP_CHAT_ID:
+            send_message_to_telegram(GROUP_CHAT_ID, message_text, TELEGRAM_BOT_TOKEN)
+    except Exception as e:
+        logging.error("Ошибка отправки уведомления о платеже: %s", e)
 # ============================================================================
+
+# ============================================================================
+# Маршрут для GET-запросов по /payment – отдает HTML-форму
 @app.route('/payment', methods=['GET'])
 def payment_form():
     order_id_param = request.args.get("order_id", "")
@@ -126,7 +175,6 @@ def payment_form():
 
 # ============================================================================
 # Функции формирования ошибок
-# ============================================================================
 def error_invalid_json():
     return {
         "error": {"code": -32700, "message": {"ru": "Could not parse JSON", "uz": "Could not parse JSON", "en": "Could not parse JSON"}, "data": None},
@@ -203,6 +251,7 @@ def error_authorization(payload):
         "result": None,
         "id": payload.get("id", 0)
     }
+# ============================================================================
 
 # ============================================================================
 # Функции работы с базой данных
@@ -217,7 +266,6 @@ def get_order_by_merchant_trans_id(merchant_trans_id):
     conn.close()
     return order
 
-# Если требуется получить заказ по order_id (целое число), можно оставить функцию get_order_by_id.
 def get_order_by_id(order_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -238,14 +286,15 @@ def update_order(order_id, fields):
     conn.commit()
     cur.close()
     conn.close()
+# ============================================================================
 
 # ============================================================================
-# Основная бизнес-логика PayMe (используем поиск по merchant_trans_id)
+# Основная бизнес-логика PayMe (поиск по merchant_trans_id)
 # ============================================================================
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
-    merchant_trans_id = account.get("order_id")  # здесь order_id содержит UUID (merchant_trans_id)
+    merchant_trans_id = account.get("order_id")  # Здесь order_id содержит UUID (merchant_trans_id)
     if merchant_trans_id is None:
         return error_order_id(payload)
     order = get_order_by_merchant_trans_id(merchant_trans_id)
@@ -333,6 +382,9 @@ def perform_transaction(payload):
             "status": "completed",
             "perform_time": perform_time
         })
+        # После обновления, получаем обновленный заказ и отправляем уведомление
+        updated_order = get_order_by_id(order_id)
+        notify_payment_success(updated_order)
         return {
             "id": payload.get("id"),
             "result": {
