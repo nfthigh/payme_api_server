@@ -1,29 +1,31 @@
 import os
 import time
 import uuid
+import psycopg2
 from dotenv import load_dotenv
 
-# Загрузка переменных окружения из .env (локально)
+# Загружаем переменные окружения из .env (локально)
 load_dotenv()
 
 # Получаем настройки из переменных окружения
 MERCHANT_ID = os.getenv("MERCHANT_ID")
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
 CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Для уникальности используем текущее время или UUID
+# Генерируем уникальный order_id (например, по текущему времени)
 order_id = str(int(time.time()))
-# При необходимости можно использовать UUID:
+# Альтернативно, можно использовать UUID:
 # order_id = uuid.uuid4().hex
 
-amount = 100000  # Цена в тийинах: 1000 сум = 100000 тийинов
+amount = 100000  # 1000 сум = 100000 тийинов
 lang = "ru"
 description = "Оплата за Кружку"
 
 # Формируем callback URL с параметром order_id
 callback_url = f"{CALLBACK_BASE_URL}?order_id={order_id}"
 
-# Формируем HTML-код формы для оплаты
+# Генерируем HTML-код формы для оплаты
 html_form = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -46,11 +48,31 @@ html_form = f"""<!DOCTYPE html>
 </html>
 """
 
-filename = "payment.html"
+# Подключаемся к PostgreSQL и создаём заказ в таблице payme_orders
+try:
+    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+    cur = conn.cursor()
+    insert_query = """
+    INSERT INTO payme_orders (order_id, total_amount, status)
+    VALUES (%s, %s, %s)
+    ON CONFLICT (order_id) DO NOTHING;
+    """
+    cur.execute(insert_query, (order_id, amount, 'pending'))
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("Заказ создан в базе данных с order_id:", order_id)
+except Exception as e:
+    print("Ошибка при вставке заказа в базу данных:", e)
+
+# Определяем директорию, где находится скрипт, и сохраняем файл там
+script_dir = os.path.dirname(os.path.abspath(__file__))
+filename = os.path.join(script_dir, "payment.html")
 
 try:
     with open(filename, "w", encoding="utf-8") as f:
         f.write(html_form)
-    print(f"Форма оплаты сгенерирована в файле {filename}. Откройте его в браузере для проведения оплаты.")
+    print(f"Форма оплаты сгенерирована в файле: {filename}")
+    print("Откройте этот файл в браузере для проведения оплаты.")
 except Exception as e:
     print("Ошибка при записи файла:", e)

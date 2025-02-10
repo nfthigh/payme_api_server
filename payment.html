@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Оплата за Кружка</title>
+</head>
+<body>
+    <h1>Оплата за Кружка</h1>
+    <form action="https://checkout.paycom.uz" method="POST">
+        <input type="hidden" name="account[order_id]" value="1739179259">
+        <input type="hidden" name="amount" value="100000">
+        <input type="hidden" name="merchant" value="6758399fd33fb8548cede2a7">
+        <input type="hidden" name="callback" value="https://payme-api-server.onrender.com/callback?order_id=1739179259">
+        <input type="hidden" name="lang" value="ru">
+        <input type="hidden" name="description" value="Оплата за Кружку">
+        <button type="submit">Оплатить</button>
+    </form>
+    <p>Order ID: 1739179259</p>
+</body>
+</html>
