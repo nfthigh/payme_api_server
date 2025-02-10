@@ -5,6 +5,7 @@ import base64
 import logging
 import sys
 import requests  # Для отправки уведомлений через Telegram Bot API
+import threading  # Импорт для автопинга
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import psycopg2
@@ -556,6 +557,23 @@ def callback():
     
     logging.info("Response: %s", json.dumps(response))
     return jsonify(response)
+
+# --- Автопинг для Render.com ---
+def auto_ping():
+    auto_ping_url = os.getenv("AUTO_PING_URL")
+    if not auto_ping_url:
+        logging.warning("AUTO_PING_URL не задан. Автопинг не запущен.")
+        return
+    while True:
+        try:
+            requests.get(auto_ping_url)
+            logging.info("Автопинг: запрос к %s выполнен успешно.", auto_ping_url)
+        except Exception as e:
+            logging.error("Ошибка автопинга: %s", e)
+        time.sleep(300)  # каждые 5 минут
+
+# Запускаем автопинг в фоновом потоке
+threading.Thread(target=auto_ping, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.environ["PORT"])
