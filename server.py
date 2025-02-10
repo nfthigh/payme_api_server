@@ -40,7 +40,7 @@ def get_db():
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-    # Создаем таблицу orders с полной схемой (совместимой с ботом)
+    # Создаем таблицу orders с полной схемой, совместимой с ботом и бизнес-логикой PayMe
     create_table_query = """
     CREATE TABLE IF NOT EXISTS orders (
         order_id SERIAL PRIMARY KEY,
@@ -54,6 +54,9 @@ def init_db():
         location_lon REAL,
         status TEXT NOT NULL,
         payment_amount INTEGER,
+        create_time BIGINT,
+        perform_time BIGINT,
+        cancel_time BIGINT,
         order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         delivery_comment TEXT,
         items TEXT
@@ -71,6 +74,9 @@ def init_db():
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS design_photo TEXT;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS location_lat REAL;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS location_lon REAL;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS create_time BIGINT;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS perform_time BIGINT;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancel_time BIGINT;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_comment TEXT;"
     ]
@@ -338,7 +344,7 @@ def create_transaction(payload):
     if order["payment_amount"] != params.get("amount"):
         return error_amount(payload)
     transaction_id = params.get("id")
-    # Изменяем условие: если статус заказа равен "pending" или "Одобрен", создаём транзакцию
+    # Если статус заказа равен "pending" или "Одобрен", создаём транзакцию
     if order["status"] in ["pending", "Одобрен"]:
         create_time = current_timestamp()
         update_order(order["order_id"], {
@@ -372,8 +378,7 @@ def create_transaction(payload):
 def perform_transaction(payload):
     params = payload.get("params", {})
     transaction_id = params.get("id")
-    # Здесь поиск заказа по транзакции можно реализовать аналогично (предполагается, что функция get_order_by_transaction уже есть)
-    # Для краткости, используем get_order_by_id после обновления, если transaction_id соответствует.
+    # Для поиска по транзакции используем функцию get_order_by_id после обновления (предполагается, что transaction_id уникален)
     order = get_order_by_transaction(transaction_id)
     if not order:
         return error_transaction(payload)
@@ -486,6 +491,16 @@ def change_password(payload):
             "error": None
         }
     return error_password(payload)
+
+# Для поиска заказа по транзакции, если требуется
+def get_order_by_transaction(transaction_id):
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM orders WHERE transaction_id = %s", (transaction_id,))
+    order = cur.fetchone()
+    cur.close()
+    conn.close()
+    return order
 
 # ============================================================================
 # Основной обработчик callback
