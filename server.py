@@ -175,7 +175,7 @@ def notify_payment_success(order):
             f"Сумма: {order.get('payment_amount',0)} сум\n"
             f"Статус: {order.get('status','N/A')}"
         )
-        # Отправляем клиенту (если хотим) - order["user_id"]
+        # Отправляем клиенту (если нужно) — order["user_id"]
         send_message_to_telegram(order["user_id"], msg, TELEGRAM_BOT_TOKEN)
 
         # Отправляем группе, если задана
@@ -235,9 +235,12 @@ def update_order(order_id, fields: dict):
     conn.close()
 
 ##############################
-# /payment?order_id=... (GET)
-# генерирует HTML-форму
+# Маршруты для тестирования
 ##############################
+@app.route("/", methods=["GET"])
+def index():
+    return "<h1>Payme Server is running</h1>", 200
+
 @app.route('/payment', methods=['GET'])
 def payment_form():
     order_id_param = request.args.get("order_id", "")
@@ -250,7 +253,6 @@ def payment_form():
     # Payme требует сумму в тийинах, 
     # если у вас amount в сумах, нужно умножать на 100 (по необходимости).
     # Здесь демонстрация — оставим как есть.
-
     html_form = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -277,7 +279,6 @@ def payment_form():
 ##############################
 # Payme JSON-RPC методы
 ##############################
-
 def is_amount_correct_in_sums_vs_tiyins(order_amount_sums: int, payme_amount_tiyins: int):
     """
     Сравнивает сумму, хранящуюся в сумах (order_amount_sums), 
