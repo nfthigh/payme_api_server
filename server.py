@@ -9,19 +9,20 @@ from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 
-# Загружаем переменные окружения из файла .env (локально)
+# Загружаем переменные окружения из файла .env
 load_dotenv()
 
-# Получаем настройки из переменных окружения
-MERCHANT_ID = os.getenv("MERCHANT_ID")
+# Для Click сервер оставляем MERCHANT_ID (не меняем его), а для PayMe используем отдельную переменную
+PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")  # новое значение для PayMe
 MERCHANT_KEY = os.getenv("MERCHANT_KEY")
+# Остальные переменные, используемые в PayMe‑сервисе:
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
 CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = Flask(__name__)
 
-# Логирование: вывод в консоль (stdout) – Render будет собирать эти логи
+# Логирование: вывод в консоль (stdout)
 logging.basicConfig(
     stream=sys.stdout,
     level=logging.INFO,
@@ -35,7 +36,7 @@ def get_db():
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-    # Обратите внимание: теперь используется order_id и payment_amount
+    # Создаем таблицу для PayMe с отдельными именами столбцов
     create_table_query = """
     CREATE TABLE IF NOT EXISTS orders (
         order_id TEXT PRIMARY KEY,
@@ -59,7 +60,7 @@ init_db()
 def current_timestamp():
     return int(round(time.time() * 1000))
 
-# Функции формирования ошибок
+# --- Функции формирования ошибок ---
 def error_invalid_json():
     return {
         "error": {"code": -32700, "message": {"ru": "Could not parse JSON", "uz": "Could not parse JSON", "en": "Could not parse JSON"}, "data": None},
@@ -137,7 +138,7 @@ def error_authorization(payload):
         "id": payload.get("id", 0)
     }
 
-# Функции работы с базой данных
+# --- Функции работы с базой данных ---
 def get_order_by_id(order_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -162,14 +163,13 @@ def update_order(order_id, fields):
     set_clause = ", ".join([f"{key} = %s" for key in fields.keys()])
     values = list(fields.values())
     values.append(order_id)
-    # Используем order_id в условии WHERE
     query = f"UPDATE orders SET {set_clause} WHERE order_id = %s"
     cur.execute(query, values)
     conn.commit()
     cur.close()
     conn.close()
 
-# Основная бизнес-логика
+# --- Основная бизнес-логика PayMe ---
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
@@ -179,7 +179,6 @@ def check_perform_transaction(payload):
     order = get_order_by_id(order_id)
     if not order:
         return error_order_id(payload)
-    # Сравнение суммы: используем payment_amount
     if order["payment_amount"] != params.get("amount"):
         return error_amount(payload)
     # Заглушка для товара "Кружка"
@@ -187,11 +186,11 @@ def check_perform_transaction(payload):
         {
             "discount": 0,
             "title": "Кружка",
-            "price": 100000,  # 1000 сум = 100000 тийинов
+            "price": 100000,
             "count": 1,
             "code": "06912001036000000",
             "units": 796,
-            "vat_percent": 12,  # VAT 12%
+            "vat_percent": 12,
             "package_code": "1184747"
         }
     ]
@@ -255,7 +254,6 @@ def perform_transaction(payload):
     order = get_order_by_transaction(transaction_id)
     if not order:
         return error_transaction(payload)
-    # Используем order_id вместо id
     order_id = order["order_id"]
     if order["status"] == "processing":
         perform_time = current_timestamp()
@@ -294,7 +292,6 @@ def check_transaction(payload):
     order_id = order["order_id"]
     if order.get("transaction_id") != transaction_id:
         return error_transaction(payload)
-    state = None
     if order["status"] == "processing":
         state = 1
     elif order["status"] == "completed":
@@ -328,8 +325,6 @@ def cancel_transaction(payload):
     if order.get("transaction_id") != transaction_id:
         return error_transaction(payload)
     cancel_time = current_timestamp()
-    new_status = ""
-    state = 0
     if order["status"] in ["pending", "processing"]:
         new_status = "cancelled"
         state = -1
@@ -381,6 +376,14 @@ def callback():
     logging.info("Headers: %s", dict(request.headers))
     logging.info("Payload: %s", payload)
     
+    # Если в запросе передаётся merchant — проверяем, что он совпадает с нашим PAYME_MERCHANT_ID
+    merchant_in_payload = payload.get("params", {}).get("merchant")
+    if merchant_in_payload and merchant_in_payload != PAYME_MERCHANT_ID:
+        logging.warning("Merchant ID mismatch: payload merchant '%s' != PAYME_MERCHANT_ID '%s'", merchant_in_payload, PAYME_MERCHANT_ID)
+        response = error_authorization(payload)
+        return jsonify(response)
+    
+    # Проверка авторизации через заголовок
     auth_header = request.headers.get("Authorization", "")
     expected_auth = "Basic " + base64.b64encode(f"Paycom:{MERCHANT_KEY}".encode()).decode()
     if auth_header.strip() != expected_auth.strip():
