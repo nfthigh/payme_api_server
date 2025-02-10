@@ -15,18 +15,18 @@ load_dotenv()
 
 # --- Переменные окружения ---
 # Для PayMe:
-PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")       # ID мерчанта для PayMe
-PAYME_MERCHANT_KEY = os.getenv("PAYME_MERCHANT_KEY")     # Ключ для формирования подписи PayMe
+PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")       # Значение для PayMe
+PAYME_MERCHANT_KEY = os.getenv("PAYME_MERCHANT_KEY")     # Ключ для подписи PayMe
 
-# Для авторизации и прочего:
-MERCHANT_KEY = os.getenv("MERCHANT_KEY")                 # Ключ для Basic Auth
+# Для авторизации:
+MERCHANT_KEY = os.getenv("MERCHANT_KEY")
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
-CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")         # Callback URL (используется для формирования ссылки PayMe)
+CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")         # Callback URL для формирования ссылки
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Переменные для уведомлений через Telegram (если используются)
+# Для уведомлений через Telegram:
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")
+GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")  # Идентификатор группы администраторов (если используется)
 
 app = Flask(__name__)
 
@@ -42,7 +42,7 @@ def get_db():
     conn = psycopg2.connect(DATABASE_URL, sslmode='require')
     return conn
 
-# --- Инициализация базы данных (создание таблицы orders, если её нет) ---
+# --- Инициализация базы данных ---
 def init_db():
     conn = get_db()
     cur = conn.cursor()
@@ -116,30 +116,66 @@ def send_message_to_telegram(chat_id, text, token):
 # --- Функция для уведомления об успешном платеже ---
 def notify_payment_success(order):
     try:
-        # Пример формирования уведомления (здесь можно добавить получение данных клиента из таблицы clients)
+        # Получаем данные клиента из таблицы clients (если есть)
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM clients WHERE user_id = %s", (order["user_id"],))
+        client = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if client:
+            client_info = (f"Клиент: {client.get('name', 'Неизвестный')} (@{client.get('username', 'нет')})\n"
+                           f"Телефон: {client.get('contact', 'не указан')}")
+        else:
+            client_info = "Данные клиента не найдены"
+
         message_text = (
             f"✅ Оплата заказа №{order['order_id']} успешно проведена!\n\n"
+            f"{client_info}\n\n"
             f"Товар: {order.get('product', 'не указан')}\n"
             f"Количество: {order.get('quantity', 'не указано')}\n"
             f"Сумма: {order.get('payment_amount', '0')} сум\n"
-            f"Комментарий: {order.get('delivery_comment', '')}"
+            f"Комментарий к доставке: {order.get('delivery_comment', '')}"
         )
-        logging.info("Уведомление об оплате сформировано: %s", message_text)
-        # Пример отправки уведомления:
-        # send_message_to_telegram(order["user_id"], message_text, TELEGRAM_BOT_TOKEN)
-        # if GROUP_CHAT_ID:
-        #     send_message_to_telegram(GROUP_CHAT_ID, message_text, TELEGRAM_BOT_TOKEN)
+        send_message_to_telegram(order["user_id"], message_text, TELEGRAM_BOT_TOKEN)
+        if GROUP_CHAT_ID:
+            send_message_to_telegram(GROUP_CHAT_ID, message_text, TELEGRAM_BOT_TOKEN)
     except Exception as e:
         logging.error("Ошибка отправки уведомления о платеже: %s", e)
 
-# --- Вспомогательная функция для проверки суммы с учетом платежной системы ---
-def is_amount_correct(order_amount, callback_amount, payment_system):
-    # Для заказов с системой "click" сравниваем напрямую (без умножения)
-    if payment_system and payment_system.lower() == "click":
-        return int(order_amount) == int(callback_amount)
-    else:
-        # По умолчанию (для PayMe) сумма в базе умножается на 100
-        return int(order_amount) * 100 == int(callback_amount)
+# --- Функция для генерации ссылки оплаты через PayMe ---
+# Если админ вводит сумму 500 сум, то в базе хранится 500, но для PayMe передается 50000 (умножение на 100)
+async def create_payme_payment_link(user_id: int, amount: int, merchant_trans_id: str) -> str:
+    lang = "ru"
+    description = "Оплата заказа"
+    callback_url = f"{CALLBACK_BASE_URL}?order_id={merchant_trans_id}"
+    payme_amount = amount * 100  # умножаем на 100
+    payment_url = (
+        f"{os.getenv('PAYME_SELF_URL')}/payment?"
+        f"order_id={merchant_trans_id}&"
+        f"amount={payme_amount}&"
+        f"merchant={PAYME_MERCHANT_ID}&"
+        f"callback={callback_url}&"
+        f"lang={lang}&"
+        f"description={description}"
+    )
+    signature_string = f"{merchant_trans_id}{payme_amount}{PAYME_MERCHANT_KEY}"
+    signature = hashlib.md5(signature_string.encode()).hexdigest()
+    payment_url += f"&signature={signature}"
+    return payment_url
+
+# --- Функция для генерации ссылки оплаты через Click (если потребуется) ---
+async def create_payment_link(user_id: int, amount: int, merchant_trans_id: str) -> str:
+    action = "0"
+    sign_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    signature_string = f"{merchant_trans_id}{os.getenv('SERVICE_ID')}{SECRET_KEY}{amount}{action}{sign_time}"
+    signature = hashlib.md5(signature_string.encode()).hexdigest()
+    payment_url = (
+        f"https://my.click.uz/services/pay?service_id={os.getenv('SERVICE_ID')}&merchant_id={MERCHANT_ID}&amount={amount:.2f}"
+        f"&transaction_param={merchant_trans_id}&return_url={os.getenv('RETURN_URL')}&signature={signature}"
+    )
+    return payment_url
 
 # --- Функции работы с базой данных ---
 def get_order_by_merchant_trans_id(merchant_trans_id):
@@ -185,7 +221,7 @@ def update_order(order_id, fields):
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
-    merchant_trans_id = account.get("order_id")  # order_id содержит UUID заказа
+    merchant_trans_id = account.get("order_id")  # order_id содержит UUID (merchant_trans_id)
     if merchant_trans_id is None:
         return error_order_id(payload)
     order = get_order_by_merchant_trans_id(merchant_trans_id)
@@ -383,7 +419,8 @@ def get_order_by_transaction(transaction_id):
     conn.close()
     return order
 
-# --- Функции формирования ошибок ---
+# ============================================================================
+# Функции формирования ошибок
 def error_invalid_json():
     return {
         "error": {"code": -32700, "message": {"ru": "Could not parse JSON", "uz": "Could not parse JSON", "en": "Could not parse JSON"}, "data": None},
@@ -466,7 +503,7 @@ def error_authorization(payload):
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
-    merchant_trans_id = account.get("order_id")  # order_id содержит UUID (merchant_trans_id)
+    merchant_trans_id = account.get("order_id")
     if merchant_trans_id is None:
         return error_order_id(payload)
     order = get_order_by_merchant_trans_id(merchant_trans_id)
@@ -717,6 +754,51 @@ def callback():
     logging.info("Response: %s", json.dumps(response))
     return jsonify(response)
 
+# ============================================================================
+# Маршрут для GET-запросов по /payment – возвращает HTML-форму оплаты
+@app.route('/payment', methods=['GET'])
+def payment_form():
+    order_id_param = request.args.get("order_id", "")
+    amount = request.args.get("amount", "")
+    merchant = request.args.get("merchant", "")
+    callback = request.args.get("callback", "")
+    lang = request.args.get("lang", "ru")
+    description = request.args.get("description", "Оплата заказа")
+    signature = request.args.get("signature", "")
+    
+    if not callback or callback.lower() == "none":
+        callback = CALLBACK_BASE_URL if CALLBACK_BASE_URL else ""
+    
+    html_form = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Оплата за заказ</title>
+</head>
+<body>
+    <h1>Оплата за заказ</h1>
+    <form action="{CHECKOUT_URL}" method="POST">
+        <input type="hidden" name="account[order_id]" value="{order_id_param}">
+        <input type="hidden" name="amount" value="{amount}">
+        <input type="hidden" name="merchant" value="{merchant}">
+        <input type="hidden" name="callback" value="{callback}">
+        <input type="hidden" name="lang" value="{lang}">
+        <input type="hidden" name="description" value="{description}">
+        <input type="hidden" name="signature" value="{signature}">
+        <button type="submit">Оплатить</button>
+    </form>
+    <p>Order ID (merchant_trans_id): {order_id_param}</p>
+</body>
+</html>"""
+    return html_form
+
+# Чтобы обрабатывать и URL с завершающим слэшем:
+@app.route('/payment/', methods=['GET'])
+def payment_form_slash():
+    return payment_form()
+
+# ============================================================================
+# Запуск сервера
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
