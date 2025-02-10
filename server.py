@@ -17,11 +17,10 @@ MERCHANT_KEY = os.getenv("MERCHANT_KEY")
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
 CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")
 DATABASE_FILE = os.getenv("DATABASE_FILE", "orders.sqlite")
-PORT = int(os.getenv("PORT", "5000"))
 
 app = Flask(__name__)
 
-# Настройка логирования: вывод в консоль (stdout) – логи будут попадать в логах Render.com
+# Настройка логирования: вывод в консоль (stdout) – логи будут попадать в Render.com
 logging.basicConfig(
     stream=sys.stdout,
     level=logging.INFO,
@@ -451,5 +450,6 @@ def callback():
     return jsonify(response)
 
 if __name__ == '__main__':
-    # Запуск сервера на 0.0.0.0:PORT – порт задается через переменную окружения
-    app.run(host='0.0.0.0', port=PORT)
+    # Используем порт, указанный в переменной окружения (без фолбэка)
+    port = int(os.environ["PORT"])
+    app.run(host='0.0.0.0', port=port)
