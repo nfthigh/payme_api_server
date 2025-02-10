@@ -111,6 +111,7 @@ def send_message_to_telegram(chat_id, text, token):
 # Функция для уведомления об успешном платеже
 def notify_payment_success(order):
     try:
+        # Получаем данные клиента из таблицы clients
         conn = get_db()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM clients WHERE user_id = %s", (order["user_id"],))
@@ -119,22 +120,18 @@ def notify_payment_success(order):
         conn.close()
 
         if client:
-            client_info = (
-                f"👤 <b>Клиент:</b> {client.get('name', 'Неизвестный')}\n"
-                f"📱 <b>Телефон:</b> {client.get('contact', 'не указан')}\n"
-                f"🔗 <b>Username:</b> @{client.get('username', 'нет')}"
-            )
+            client_info = (f"Клиент: {client.get('name', 'Неизвестный')} "
+                           f"(@{client.get('username', 'нет')})\nТелефон: {client.get('contact', 'не указан')}")
         else:
-            client_info = "⚠️ <b>Данные клиента не найдены</b>"
+            client_info = "Данные клиента не найдены"
 
         message_text = (
-            f"🎉 <b>Заказ №{order['order_id']} успешно оплачен!</b>\n\n"
+            f"✅ Оплата заказа №{order['order_id']} успешно проведена!\n\n"
             f"{client_info}\n\n"
-            f"📦 <b>Товар:</b> {order.get('product', 'не указан')}\n"
-            f"🔢 <b>Количество:</b> {order.get('quantity', 'не указано')} шт.\n"
-            f"💰 <b>Сумма:</b> {order.get('payment_amount', '0')} сум\n"
-            f"📝 <b>Комментарий к доставке:</b> {order.get('delivery_comment', '—')}\n\n"
-            f"🕒 <b>Статус:</b> Оплачен ✅"
+            f"Товар: {order.get('product', 'не указан')}\n"
+            f"Количество: {order.get('quantity', 'не указано')}\n"
+            f"Сумма: {order.get('payment_amount', '0')} сум\n"
+            f"Комментарий к доставке: {order.get('delivery_comment', '')}"
         )
 
         send_message_to_telegram(order["user_id"], message_text, TELEGRAM_BOT_TOKEN)
@@ -299,11 +296,12 @@ def update_order(order_id, fields):
 # Вспомогательная функция для проверки суммы с учетом платежной системы
 def is_amount_correct(order_amount, callback_amount, payment_system):
     if payment_system and payment_system.lower() == "click":
+        # Для Click сумма в базе умножается на 100 для сравнения
         return int(order_amount) * 100 == int(callback_amount)
     else:
-        # Для PayMe сумма приходит в тийнах (делим на 100)
-        return int(order_amount) == (int(callback_amount) // 100)
-    
+        # Для PayMe сравниваем напрямую
+        return int(order_amount) == int(callback_amount)
+
 # ============================================================================
 # Основная бизнес-логика PayMe (используем поиск по merchant_trans_id)
 # ============================================================================
