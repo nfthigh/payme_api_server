@@ -5,7 +5,7 @@ import base64
 import logging
 import sys
 import requests  # Для отправки уведомлений через Telegram Bot API
-import threading  # Импорт для автопинга
+import threading  # Для автопинга
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import psycopg2
@@ -470,7 +470,7 @@ def error_unknown_method(payload):
 
 # ============================================================================
 
-# Маршрут для GET-запросов по /payment – отдает HTML-форму оплаты
+# Маршрут для GET-запросов по /payment – отдает HTML-форму оплаты с автосабмитом
 @app.route('/payment', methods=['GET'])
 def payment_form():
     order_id_param = request.args.get("order_id", "")
@@ -484,11 +484,17 @@ def payment_form():
     if not callback or callback.lower() == "none":
         callback = CALLBACK_BASE_URL if CALLBACK_BASE_URL else ""
     
+    # Форма теперь содержит JS, который автоматически отправляет форму при загрузке
     html_form = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <title>Оплата за заказ</title>
+    <script>
+      window.onload = function() {{
+        document.forms[0].submit();
+      }};
+    </script>
 </head>
 <body>
     <h1>Оплата за заказ</h1>
