@@ -17,7 +17,7 @@ MERCHANT_KEY = os.getenv("MERCHANT_KEY")
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
 CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
-SELF_URL = os.getenv("SELF_URL")  # Публичный URL вашего сервера
+SELF_URL = os.getenv("SELF_URL")  # Если потребуется (обычно сервер сам развернут на нужном домене)
 
 app = Flask(__name__)
 
@@ -62,7 +62,6 @@ def current_timestamp():
     return int(round(time.time() * 1000))
 
 # Функции формирования ошибок
-
 def error_invalid_json():
     return {
         "error": {"code": -32700, "message": {"ru": "Could not parse JSON", "uz": "Could not parse JSON", "en": "Could not parse JSON"}, "data": None},
@@ -140,8 +139,7 @@ def error_authorization(payload):
         "id": payload.get("id", 0)
     }
 
-# Функции работы с БД для таблицы payme_orders
-
+# Функции работы с базой данных для таблицы payme_orders
 def get_order_by_id(order_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -173,7 +171,6 @@ def update_order(order_id, fields):
     conn.close()
 
 # Основная бизнес-логика для Payme-заказов
-
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
@@ -372,7 +369,7 @@ def callback():
     return jsonify(response)
 
 # Новый маршрут для формирования HTML-формы оплаты через Payme.
-# При переходе по URL вида https://SELF_URL/payme/<order_id> клиент получает форму с автоперенаправлением на CHECKOUT_URL.
+# При переходе по URL вида https://<ваш_payme-сервер>/payme/<order_id> клиент получает форму с автоперенаправлением на CHECKOUT_URL.
 @app.route('/payme/<order_id>', methods=['GET'])
 def payme_form(order_id):
     order = get_order_by_id(order_id)
