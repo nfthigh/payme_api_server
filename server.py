@@ -13,7 +13,6 @@ import psycopg2.extras
 # Загружаем переменные окружения
 load_dotenv()
 
-# Для Click оставляем MERCHANT_ID (не используется здесь), а для PayMe – отдельные переменные:
 PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")  # Значение для PayMe
 MERCHANT_KEY = os.getenv("MERCHANT_KEY")
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
@@ -40,7 +39,7 @@ def get_db():
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-    # Создаем таблицу orders с полной схемой (совместимой с ботом)
+    # Обновлённая схема таблицы orders: добавлен столбец payme_amount для сумм PayMe (тийины)
     create_table_query = """
     CREATE TABLE IF NOT EXISTS orders (
         order_id SERIAL PRIMARY KEY,
@@ -54,7 +53,8 @@ def init_db():
         location_lon REAL,
         status TEXT NOT NULL,
         payment_amount INTEGER,
-        payment_system TEXT,  -- "click" или "payme"
+        payme_amount INTEGER,
+        payment_system TEXT,
         create_time BIGINT,
         perform_time BIGINT,
         cancel_time BIGINT,
@@ -66,7 +66,6 @@ def init_db():
     """
     cur.execute(create_table_query)
     conn.commit()
-    # Добавляем недостающие столбцы, если они отсутствуют
     alter_queries = [
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id BIGINT;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS merchant_trans_id TEXT;",
@@ -82,7 +81,8 @@ def init_db():
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_comment TEXT;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS transaction_id TEXT;",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_system TEXT;"
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_system TEXT;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payme_amount INTEGER;"
     ]
     for query in alter_queries:
         try:
@@ -111,7 +111,6 @@ def send_message_to_telegram(chat_id, text, token):
 # Функция для уведомления об успешном платеже
 def notify_payment_success(order):
     try:
-        # Получаем данные клиента из таблицы clients
         conn = get_db()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM clients WHERE user_id = %s", (order["user_id"],))
@@ -140,127 +139,7 @@ def notify_payment_success(order):
     except Exception as e:
         logging.error("Ошибка отправки уведомления о платеже: %s", e)
 
-# ============================================================================
-# Маршрут для GET-запросов по /payment – отдает HTML-форму оплаты
-@app.route('/payment', methods=['GET'])
-def payment_form():
-    order_id_param = request.args.get("order_id", "")
-    amount = request.args.get("amount", "")
-    merchant = request.args.get("merchant", "")
-    callback = request.args.get("callback", "")
-    lang = request.args.get("lang", "ru")
-    description = request.args.get("description", "Оплата заказа")
-    signature = request.args.get("signature", "")
-    
-    if not callback or callback.lower() == "none":
-        callback = CALLBACK_BASE_URL if CALLBACK_BASE_URL else ""
-    
-    html_form = f"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <title>Оплата за заказ</title>
-</head>
-<body>
-    <h1>Оплата за заказ</h1>
-    <form action="{CHECKOUT_URL}" method="POST">
-        <input type="hidden" name="account[order_id]" value="{order_id_param}">
-        <input type="hidden" name="amount" value="{amount}">
-        <input type="hidden" name="merchant" value="{merchant}">
-        <input type="hidden" name="callback" value="{callback}">
-        <input type="hidden" name="lang" value="{lang}">
-        <input type="hidden" name="description" value="{description}">
-        <input type="hidden" name="signature" value="{signature}">
-        <button type="submit">Оплатить</button>
-    </form>
-    <p>Order ID (merchant_trans_id): {order_id_param}</p>
-</body>
-</html>"""
-    return html_form
-
-# ============================================================================
-# Функции формирования ошибок
-def error_invalid_json():
-    return {
-        "error": {"code": -32700, "message": {"ru": "Could not parse JSON", "uz": "Could not parse JSON", "en": "Could not parse JSON"}, "data": None},
-        "result": None,
-        "id": 0
-    }
-
-def error_order_id(payload):
-    return {
-        "error": {"code": -31099, "message": {"ru": "Order number cannot be found", "uz": "Order number cannot be found", "en": "Order number cannot be found"}, "data": "order"},
-        "result": None,
-        "id": payload.get("id", 0)
-    }
-
-def error_amount(payload):
-    return {
-        "error": {"code": -31001, "message": {"ru": "Order amount is incorrect", "uz": "Order amount is incorrect", "en": "Order amount is incorrect"}, "data": "amount"},
-        "result": None,
-        "id": payload.get("id", 0)
-    }
-
-def error_has_another_transaction(payload):
-    return {
-        "error": {"code": -31099, "message": {"ru": "Other transaction for this order is in progress", "uz": "Other transaction for this order is in progress", "en": "Other transaction for this order is in progress"}, "data": "order"},
-        "result": None,
-        "id": payload.get("id", 0)
-    }
-
-def error_unknown(payload):
-    return {
-        "error": {"code": -31008, "message": {"ru": "Unknown error", "uz": "Unknown error", "en": "Unknown error"}, "data": None},
-        "result": None,
-        "id": payload.get("id", 0)
-    }
-
-def error_unknown_method(payload):
-    return {
-        "error": {"code": -32601, "message": {"ru": "Unknown method", "uz": "Unknown method", "en": "Unknown method"}, "data": payload.get("method", "")},
-        "result": None,
-        "id": payload.get("id", 0)
-    }
-
-def error_transaction(payload):
-    return {
-        "error": {"code": -31003, "message": {"ru": "Transaction number is wrong", "uz": "Transaction number is wrong", "en": "Transaction number is wrong"}, "data": "id"},
-        "result": None,
-        "id": payload.get("id", 0)
-    }
-
-def error_cancelled_transaction(payload):
-    return {
-        "error": {"code": -31008, "message": {"ru": "Transaction was cancelled or refunded", "uz": "Transaction was cancelled or refunded", "en": "Transaction was cancelled or refunded"}, "data": "order"},
-        "result": None,
-        "id": payload.get("id", 0)
-    }
-
-def error_cancel(payload):
-    return {
-        "error": {"code": -31007, "message": {"ru": "It is impossible to cancel. The order is completed", "uz": "It is impossible to cancel. The order is completed", "en": "It is impossible to cancel. The order is completed"}, "data": "order"},
-        "result": None,
-        "id": payload.get("id", 0)
-    }
-
-def error_password(payload):
-    return {
-        "error": {"code": -32400, "message": {"ru": "Cannot change the password", "uz": "Cannot change the password", "en": "Cannot change the password"}, "data": "password"},
-        "result": None,
-        "id": payload.get("id", 0)
-    }
-
-def error_authorization(payload):
-    return {
-        "error": {"code": -32504, "message": {"ru": "Error during authorization", "uz": "Error during authorization", "en": "Error during authorization"}, "data": None},
-        "result": None,
-        "id": payload.get("id", 0)
-    }
-# ============================================================================
-
-# ============================================================================
 # Функции работы с базой данных
-# ============================================================================
 def get_order_by_merchant_trans_id(merchant_trans_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -290,21 +169,19 @@ def update_order(order_id, fields):
     conn.commit()
     cur.close()
     conn.close()
-# ============================================================================
 
-# ============================================================================
-# Вспомогательная функция для проверки суммы с учетом платежной системы
-def is_amount_correct(order_amount, callback_amount, payment_system):
-    if payment_system and payment_system.lower() == "click":
-        # Для Click сумма в базе умножается на 100 для сравнения
-        return int(order_amount) * 100 == int(callback_amount)
+# Функция проверки суммы с учетом платежной системы:
+# Для Click берём значение из payment_amount (и умножаем на 100 для сравнения с копейками),
+# а для PayMe – используем значение из payme_amount, которое уже хранится в тийинах.
+def is_amount_correct(order, callback_amount):
+    payment_system = order.get("payment_system", "payme").lower()
+    if payment_system == "click":
+        return int(order["payment_amount"]) * 100 == int(callback_amount)
+    elif payment_system == "payme":
+        return int(order["payme_amount"]) == int(callback_amount)
     else:
-        # Для PayMe сравниваем напрямую
-        return int(order_amount) == int(callback_amount)
+        return int(order["payment_amount"]) == int(callback_amount)
 
-# ============================================================================
-# Основная бизнес-логика PayMe (используем поиск по merchant_trans_id)
-# ============================================================================
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
@@ -314,7 +191,7 @@ def check_perform_transaction(payload):
     order = get_order_by_merchant_trans_id(merchant_trans_id)
     if not order:
         return error_order_id(payload)
-    if not is_amount_correct(order["payment_amount"], params.get("amount"), order.get("payment_system", "payme")):
+    if not is_amount_correct(order, params.get("amount")):
         return error_amount(payload)
     stub_items = [
         {
@@ -349,7 +226,7 @@ def create_transaction(payload):
     order = get_order_by_merchant_trans_id(merchant_trans_id)
     if not order:
         return error_order_id(payload)
-    if not is_amount_correct(order["payment_amount"], params.get("amount"), order.get("payment_system", "payme")):
+    if not is_amount_correct(order, params.get("amount")):
         return error_amount(payload)
     transaction_id = params.get("id")
     if order["status"].lower() in ["pending", "одобрен"]:
@@ -506,9 +383,124 @@ def get_order_by_transaction(transaction_id):
     conn.close()
     return order
 
+# --- Функции формирования ошибок ---
+def error_invalid_json():
+    return {
+        "error": {"code": -32700, "message": {"ru": "Could not parse JSON", "uz": "Could not parse JSON", "en": "Could not parse JSON"}, "data": None},
+        "result": None,
+        "id": 0
+    }
+
+def error_order_id(payload):
+    return {
+        "error": {"code": -31099, "message": {"ru": "Order number cannot be found", "uz": "Order number cannot be found", "en": "Order number cannot be found"}, "data": "order"},
+        "result": None,
+        "id": payload.get("id", 0)
+    }
+
+def error_amount(payload):
+    return {
+        "error": {"code": -31001, "message": {"ru": "Order amount is incorrect", "uz": "Order amount is incorrect", "en": "Order amount is incorrect"}, "data": "amount"},
+        "result": None,
+        "id": payload.get("id", 0)
+    }
+
+def error_has_another_transaction(payload):
+    return {
+        "error": {"code": -31099, "message": {"ru": "Other transaction for this order is in progress", "uz": "Other transaction for this order is in progress", "en": "Other transaction for this order is in progress"}, "data": "order"},
+        "result": None,
+        "id": payload.get("id", 0)
+    }
+
+def error_unknown(payload):
+    return {
+        "error": {"code": -31008, "message": {"ru": "Unknown error", "uz": "Unknown error", "en": "Unknown error"}, "data": None},
+        "result": None,
+        "id": payload.get("id", 0)
+    }
+
+def error_transaction(payload):
+    return {
+        "error": {"code": -31003, "message": {"ru": "Transaction number is wrong", "uz": "Transaction number is wrong", "en": "Transaction number is wrong"}, "data": "id"},
+        "result": None,
+        "id": payload.get("id", 0)
+    }
+
+def error_cancelled_transaction(payload):
+    return {
+        "error": {"code": -31008, "message": {"ru": "Transaction was cancelled or refunded", "uz": "Transaction was cancelled or refunded", "en": "Transaction was cancelled or refunded"}, "data": "order"},
+        "result": None,
+        "id": payload.get("id", 0)
+    }
+
+def error_cancel(payload):
+    return {
+        "error": {"code": -31007, "message": {"ru": "It is impossible to cancel. The order is completed", "uz": "It is impossible to cancel. The order is completed", "en": "It is impossible to cancel. The order is completed"}, "data": "order"},
+        "result": None,
+        "id": payload.get("id", 0)
+    }
+
+def error_password(payload):
+    return {
+        "error": {"code": -32400, "message": {"ru": "Cannot change the password", "uz": "Cannot change the password", "en": "Cannot change the password"}, "data": "password"},
+        "result": None,
+        "id": payload.get("id", 0)
+    }
+
+def error_authorization(payload):
+    return {
+        "error": {"code": -32504, "message": {"ru": "Error during authorization", "uz": "Error during authorization", "en": "Error during authorization"}, "data": None},
+        "result": None,
+        "id": payload.get("id", 0)
+    }
+
+def error_unknown_method(payload):
+    return {
+        "error": {"code": -32601, "message": {"ru": "Unknown method", "uz": "Unknown method", "en": "Unknown method"}, "data": payload.get("method", "")},
+        "result": None,
+        "id": payload.get("id", 0)
+    }
+
 # ============================================================================
+
+# Маршрут для GET-запросов по /payment – отдает HTML-форму оплаты
+@app.route('/payment', methods=['GET'])
+def payment_form():
+    order_id_param = request.args.get("order_id", "")
+    amount = request.args.get("amount", "")
+    merchant = request.args.get("merchant", "")
+    callback = request.args.get("callback", "")
+    lang = request.args.get("lang", "ru")
+    description = request.args.get("description", "Оплата заказа")
+    signature = request.args.get("signature", "")
+    
+    if not callback or callback.lower() == "none":
+        callback = CALLBACK_BASE_URL if CALLBACK_BASE_URL else ""
+    
+    html_form = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Оплата за заказ</title>
+</head>
+<body>
+    <h1>Оплата за заказ</h1>
+    <form action="{CHECKOUT_URL}" method="POST">
+        <input type="hidden" name="account[order_id]" value="{order_id_param}">
+        <input type="hidden" name="amount" value="{amount}">
+        <input type="hidden" name="merchant" value="{merchant}">
+        <input type="hidden" name="callback" value="{callback}">
+        <input type="hidden" name="lang" value="{lang}">
+        <input type="hidden" name="description" value="{description}">
+        <input type="hidden" name="signature" value="{signature}">
+        <button type="submit">Оплатить</button>
+    </form>
+    <p>Order ID (merchant_trans_id): {order_id_param}</p>
+</body>
+</html>"""
+    return html_form
+
 # Основной обработчик callback
-# ============================================================================
 @app.route('/callback', methods=['POST'])
 def callback():
     try:
@@ -524,7 +516,7 @@ def callback():
     logging.info("Headers: %s", dict(request.headers))
     logging.info("Payload: %s", payload)
     
-    # Проверяем, что в параметрах передан merchant, и он соответствует нашему PAYME_MERCHANT_ID
+    # Проверка merchant
     merchant_in_payload = payload.get("params", {}).get("merchant")
     if merchant_in_payload and merchant_in_payload != PAYME_MERCHANT_ID:
         logging.warning("Merchant ID mismatch: payload merchant '%s' != PAYME_MERCHANT_ID '%s'", merchant_in_payload, PAYME_MERCHANT_ID)
