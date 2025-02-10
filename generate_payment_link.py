@@ -3,7 +3,7 @@ import time
 import uuid
 from dotenv import load_dotenv
 
-# Загрузка переменных окружения из .env
+# Загрузка переменных окружения из .env (локально)
 load_dotenv()
 
 # Получаем настройки из переменных окружения
@@ -46,9 +46,11 @@ html_form = f"""<!DOCTYPE html>
 </html>
 """
 
-# Сохраним HTML в файл
 filename = "payment.html"
-with open(filename, "w", encoding="utf-8") as f:
-    f.write(html_form)
 
-print(f"Форма оплаты сгенерирована в файле {filename}. Откройте его в браузере для проведения оплаты.")
+try:
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(html_form)
+    print(f"Форма оплаты сгенерирована в файле {filename}. Откройте его в браузере для проведения оплаты.")
+except Exception as e:
+    print("Ошибка при записи файла:", e)

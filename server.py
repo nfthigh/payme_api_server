@@ -8,10 +8,10 @@ import sys
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 
-# Загрузка переменных окружения из .env
+# Загрузка переменных окружения из .env (локально)
 load_dotenv()
 
-# Получение настроек из переменных окружения
+# Получаем настройки из переменных окружения
 MERCHANT_ID = os.getenv("MERCHANT_ID")
 MERCHANT_KEY = os.getenv("MERCHANT_KEY")
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
@@ -20,7 +20,7 @@ DATABASE_FILE = os.getenv("DATABASE_FILE", "orders.sqlite")
 
 app = Flask(__name__)
 
-# Настройка логирования: вывод в консоль (stdout) – логи будут попадать в Render.com
+# Логирование в stdout – Render будет собирать вывод из консоли
 logging.basicConfig(
     stream=sys.stdout,
     level=logging.INFO,
@@ -33,14 +33,14 @@ def init_db():
     conn.execute('''
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            total_amount INTEGER NOT NULL,  -- сумма в тийинах; для товара "Кружка" цена будет 100000 (1000 сум)
+            total_amount INTEGER NOT NULL,  -- для товара "Кружка" цена будет 100000 (1000 сум)
             status TEXT NOT NULL,             -- возможные статусы: pending, processing, completed, cancelled, refunded
             create_time INTEGER,
             perform_time INTEGER,
             cancel_time INTEGER,
             transaction_id TEXT,
             cancel_reason TEXT,
-            items TEXT  -- это поле не используется, вместо него возвращаются заглушечные данные
+            items TEXT  -- не используется, вместо него возвращаются заглушечные данные
         )
     ''')
     conn.commit()
@@ -396,7 +396,7 @@ def change_password(payload):
     params = payload.get("params", {})
     new_password = params.get("password")
     if new_password != MERCHANT_KEY:
-        # Симулируем успешное изменение пароля (в реальном решении необходимо обновлять сохранённое значение)
+        # Симулируем успешное изменение пароля
         return {
             "id": payload.get("id"),
             "result": {"success": True},
@@ -450,6 +450,6 @@ def callback():
     return jsonify(response)
 
 if __name__ == '__main__':
-    # Используем порт, указанный в переменной окружения (без фолбэка)
+    # Используем порт, который Render задаёт через переменную окружения
     port = int(os.environ["PORT"])
     app.run(host='0.0.0.0', port=port)
