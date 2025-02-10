@@ -9,19 +9,18 @@ from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 
-# Загружаем переменные окружения из файла .env (локально)
+# Загружаем переменные окружения из .env
 load_dotenv()
 
-# Получаем настройки из переменных окружения
 MERCHANT_ID = os.getenv("MERCHANT_ID")
 MERCHANT_KEY = os.getenv("MERCHANT_KEY")
 CHECKOUT_URL = os.getenv("CHECKOUT_URL")
 CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
+SELF_URL = os.getenv("SELF_URL")  # Публичный URL вашего сервера
 
 app = Flask(__name__)
 
-# Логирование: вывод в консоль (stdout)
 logging.basicConfig(
     stream=sys.stdout,
     level=logging.INFO,
@@ -63,6 +62,7 @@ def current_timestamp():
     return int(round(time.time() * 1000))
 
 # Функции формирования ошибок
+
 def error_invalid_json():
     return {
         "error": {"code": -32700, "message": {"ru": "Could not parse JSON", "uz": "Could not parse JSON", "en": "Could not parse JSON"}, "data": None},
@@ -140,7 +140,8 @@ def error_authorization(payload):
         "id": payload.get("id", 0)
     }
 
-# Функции работы с базой данных для таблицы payme_orders
+# Функции работы с БД для таблицы payme_orders
+
 def get_order_by_id(order_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -172,6 +173,7 @@ def update_order(order_id, fields):
     conn.close()
 
 # Основная бизнес-логика для Payme-заказов
+
 def check_perform_transaction(payload):
     params = payload.get("params", {})
     account = params.get("account", {})
@@ -183,12 +185,11 @@ def check_perform_transaction(payload):
         return error_order_id(payload)
     if order["total_amount"] != params.get("amount"):
         return error_amount(payload)
-    # Возвращаем заглушечные параметры для товара "Кружка":
     stub_items = [
         {
             "discount": 0,
             "title": "Кружка",
-            "price": 100000,  # 1000 сум = 100000 тийинов
+            "price": 100000,
             "count": 1,
             "code": "06912001036000000",
             "units": 796,
@@ -370,6 +371,39 @@ def callback():
     logging.info("Response: %s", json.dumps(response))
     return jsonify(response)
 
+# Новый маршрут для формирования HTML-формы оплаты через Payme.
+# При переходе по URL вида https://SELF_URL/payme/<order_id> клиент получает форму с автоперенаправлением на CHECKOUT_URL.
+@app.route('/payme/<order_id>', methods=['GET'])
+def payme_form(order_id):
+    order = get_order_by_id(order_id)
+    if not order:
+        return "Order not found", 404
+    total_amount = order.get("total_amount")
+    # Формируем callback URL с параметром order_id
+    callback_url = f"{CALLBACK_BASE_URL}?order_id={order_id}"
+    html_form = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Оплата заказа через Payme</title>
+</head>
+<body>
+    <h1>Оплата заказа через Payme</h1>
+    <form action="{CHECKOUT_URL}" method="POST">
+        <input type="hidden" name="account[order_id]" value="{order_id}">
+        <input type="hidden" name="amount" value="{total_amount}">
+        <input type="hidden" name="merchant" value="{MERCHANT_ID}">
+        <input type="hidden" name="callback" value="{callback_url}">
+        <input type="hidden" name="lang" value="ru">
+        <input type="hidden" name="description" value="Оплата заказа">
+        <button type="submit">Оплатить</button>
+    </form>
+    <p>Order ID: {order_id}</p>
+</body>
+</html>
+"""
+    return html_form
+
 if __name__ == '__main__':
-    port = int(os.environ["PORT"])
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
