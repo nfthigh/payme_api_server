@@ -40,7 +40,7 @@ def get_db():
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-    # Создаем таблицу orders с полной схемой, совместимой с ботом и бизнес-логикой PayMe
+    # Создаем таблицу orders с полной схемой (совместимой с ботом)
     create_table_query = """
     CREATE TABLE IF NOT EXISTS orders (
         order_id SERIAL PRIMARY KEY,
@@ -59,7 +59,8 @@ def init_db():
         cancel_time BIGINT,
         order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         delivery_comment TEXT,
-        items TEXT
+        items TEXT,
+        transaction_id TEXT
     );
     """
     cur.execute(create_table_query)
@@ -78,7 +79,8 @@ def init_db():
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS perform_time BIGINT;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancel_time BIGINT;",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP;",
-        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_comment TEXT;"
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_comment TEXT;",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS transaction_id TEXT;"
     ]
     for query in alter_queries:
         try:
@@ -305,14 +307,15 @@ def check_perform_transaction(payload):
     order = get_order_by_merchant_trans_id(merchant_trans_id)
     if not order:
         return error_order_id(payload)
-    if order["payment_amount"] != params.get("amount"):
+    # Для PayMe считаем, что сумма в базе хранится в суммах, а callback приходит в тийинах
+    if int(order["payment_amount"]) * 100 != int(params.get("amount")):
         return error_amount(payload)
     # Формируем receipt с суммой, равной сохраненной в заказе (без преобразования)
     stub_items = [
         {
             "discount": 0,
             "title": "Кружка",
-            "price": order["payment_amount"],
+            "price": order["payment_amount"],  # отображаем исходную сумму
             "count": 1,
             "code": "06912001036000000",
             "units": 796,
@@ -341,7 +344,8 @@ def create_transaction(payload):
     order = get_order_by_merchant_trans_id(merchant_trans_id)
     if not order:
         return error_order_id(payload)
-    if order["payment_amount"] != params.get("amount"):
+    # Для PayMe: сравниваем умноженную сумму
+    if int(order["payment_amount"]) * 100 != int(params.get("amount")):
         return error_amount(payload)
     transaction_id = params.get("id")
     # Если статус заказа равен "pending" или "Одобрен", создаём транзакцию
@@ -378,7 +382,6 @@ def create_transaction(payload):
 def perform_transaction(payload):
     params = payload.get("params", {})
     transaction_id = params.get("id")
-    # Для поиска по транзакции используем функцию get_order_by_id после обновления (предполагается, что transaction_id уникален)
     order = get_order_by_transaction(transaction_id)
     if not order:
         return error_transaction(payload)
@@ -389,7 +392,6 @@ def perform_transaction(payload):
             "status": "completed",
             "perform_time": perform_time
         })
-        # После успешного обновления, получаем обновленный заказ и отправляем уведомление
         updated_order = get_order_by_id(order_id)
         notify_payment_success(updated_order)
         return {
@@ -492,7 +494,6 @@ def change_password(payload):
         }
     return error_password(payload)
 
-# Для поиска заказа по транзакции, если требуется
 def get_order_by_transaction(transaction_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
