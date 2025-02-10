@@ -293,14 +293,19 @@ def update_order(order_id, fields):
 # ============================================================================
 
 # ============================================================================
-# Вспомогательная функция для проверки суммы с учетом платежной системы
-def is_amount_correct(order_amount, callback_amount, payment_system):
-    if payment_system and payment_system.lower() == "click":
-        # Для Click сумма в базе умножается на 100 для сравнения
-        return int(order_amount) * 100 == int(callback_amount)
-    else:
-        # Для PayMe сравниваем напрямую
-        return int(order_amount) == int(callback_amount)
+# Функции проверки суммы для разных платежных систем
+# ============================================================================
+def is_amount_correct_click(order_amount, callback_amount):
+    """
+    Для Click суммы сравниваются напрямую.
+    """
+    return int(order_amount) == int(callback_amount)
+
+def is_amount_correct_payme(order_amount, callback_amount):
+    """
+    Для PayMe сумма из базы умножается на 100 для сравнения с переданным значением.
+    """
+    return int(order_amount) * 100 == int(callback_amount)
 
 # ============================================================================
 # Основная бизнес-логика PayMe (используем поиск по merchant_trans_id)
@@ -314,8 +319,13 @@ def check_perform_transaction(payload):
     order = get_order_by_merchant_trans_id(merchant_trans_id)
     if not order:
         return error_order_id(payload)
-    if not is_amount_correct(order["payment_amount"], params.get("amount"), order.get("payment_system", "payme")):
-        return error_amount(payload)
+    payment_system = order.get("payment_system", "payme").lower()
+    if payment_system == "click":
+        if not is_amount_correct_click(order["payment_amount"], params.get("amount")):
+            return error_amount(payload)
+    else:
+        if not is_amount_correct_payme(order["payment_amount"], params.get("amount")):
+            return error_amount(payload)
     stub_items = [
         {
             "discount": 0,
@@ -349,8 +359,13 @@ def create_transaction(payload):
     order = get_order_by_merchant_trans_id(merchant_trans_id)
     if not order:
         return error_order_id(payload)
-    if not is_amount_correct(order["payment_amount"], params.get("amount"), order.get("payment_system", "payme")):
-        return error_amount(payload)
+    payment_system = order.get("payment_system", "payme").lower()
+    if payment_system == "click":
+        if not is_amount_correct_click(order["payment_amount"], params.get("amount")):
+            return error_amount(payload)
+    else:
+        if not is_amount_correct_payme(order["payment_amount"], params.get("amount")):
+            return error_amount(payload)
     transaction_id = params.get("id")
     if order["status"].lower() in ["pending", "одобрен"]:
         create_time = current_timestamp()
