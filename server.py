@@ -294,11 +294,12 @@ def update_order(order_id, fields):
 
 # ============================================================================
 # Вспомогательная функция для проверки суммы с учетом платежной системы
-# Теперь для систем Click и PayMe сумма в базе умножается на 100 для сравнения
 def is_amount_correct(order_amount, callback_amount, payment_system):
-    if payment_system and payment_system.lower() in ["click", "payme"]:
+    if payment_system and payment_system.lower() == "click":
+        # Для Click сумма в базе умножается на 100 для сравнения
         return int(order_amount) * 100 == int(callback_amount)
     else:
+        # Для PayMe сравниваем напрямую
         return int(order_amount) == int(callback_amount)
 
 # ============================================================================
