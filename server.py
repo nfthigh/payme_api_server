@@ -140,7 +140,7 @@ def error_authorization(payload):
 def get_order_by_id(order_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
+    cur.execute("SELECT * FROM orders WHERE order_id = %s", (order_id,))
     order = cur.fetchone()
     cur.close()
     conn.close()

@@ -53,9 +53,10 @@ try:
     conn = psycopg2.connect(DATABASE_URL, sslmode='require')
     cur = conn.cursor()
     insert_query = """
-    INSERT INTO orders (id, total_amount, status)
-    VALUES (%s, %s, %s)
-    ON CONFLICT (id) DO NOTHING;
+   INSERT INTO orders (order_id, payment_amount, status)
+VALUES (%s, %s, %s)
+ON CONFLICT (order_id) DO NOTHING;
+
     """
     cur.execute(insert_query, (order_id, amount, 'pending'))
     conn.commit()
