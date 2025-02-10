@@ -13,9 +13,9 @@ CHECKOUT_URL = os.getenv("CHECKOUT_URL")
 CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Генерируем уникальный order_id (например, по текущему времени)
+# Генерируем уникальный order_id (например, по времени)
 order_id = str(int(time.time()))
-# Альтернативно, можно использовать UUID:
+# При необходимости можно использовать UUID:
 # order_id = uuid.uuid4().hex
 
 amount = 100000  # 1000 сум = 100000 тийинов
@@ -48,20 +48,20 @@ html_form = f"""<!DOCTYPE html>
 </html>
 """
 
-# Подключаемся к PostgreSQL и создаём заказ в таблице payme_orders
+# Подключаемся к PostgreSQL и создаём заказ
 try:
     conn = psycopg2.connect(DATABASE_URL, sslmode='require')
     cur = conn.cursor()
     insert_query = """
-    INSERT INTO payme_orders (order_id, total_amount, status)
+    INSERT INTO orders (id, total_amount, status)
     VALUES (%s, %s, %s)
-    ON CONFLICT (order_id) DO NOTHING;
+    ON CONFLICT (id) DO NOTHING;
     """
     cur.execute(insert_query, (order_id, amount, 'pending'))
     conn.commit()
     cur.close()
     conn.close()
-    print("Заказ создан в базе данных с order_id:", order_id)
+    print("Заказ создан в базе данных с id:", order_id)
 except Exception as e:
     print("Ошибка при вставке заказа в базу данных:", e)
 
