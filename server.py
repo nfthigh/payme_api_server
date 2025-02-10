@@ -193,11 +193,17 @@ def check_perform_transaction(payload):
         return error_order_id(payload)
     if not is_amount_correct(order, params.get("amount")):
         return error_amount(payload)
+    # Если заказ для PayMe, то используем значение payme_amount в чеке,
+    # иначе – значение payment_amount.
+    if order.get("payment_system", "payme").lower() == "payme":
+        item_price = order["payme_amount"]
+    else:
+        item_price = order["payment_amount"]
     stub_items = [
         {
             "discount": 0,
             "title": "Кружка",
-            "price": order["payment_amount"],
+            "price": item_price,
             "count": 1,
             "code": "06912001036000000",
             "units": 796,
