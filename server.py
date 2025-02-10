@@ -35,10 +35,11 @@ def get_db():
 def init_db():
     conn = get_db()
     cur = conn.cursor()
+    # Обратите внимание: теперь используется order_id и payment_amount
     create_table_query = """
     CREATE TABLE IF NOT EXISTS orders (
-        id TEXT PRIMARY KEY,
-        total_amount INTEGER NOT NULL,
+        order_id TEXT PRIMARY KEY,
+        payment_amount INTEGER NOT NULL,
         status TEXT NOT NULL,
         create_time BIGINT,
         perform_time BIGINT,
@@ -161,7 +162,8 @@ def update_order(order_id, fields):
     set_clause = ", ".join([f"{key} = %s" for key in fields.keys()])
     values = list(fields.values())
     values.append(order_id)
-    query = f"UPDATE orders SET {set_clause} WHERE id = %s"
+    # Используем order_id в условии WHERE
+    query = f"UPDATE orders SET {set_clause} WHERE order_id = %s"
     cur.execute(query, values)
     conn.commit()
     cur.close()
@@ -177,9 +179,10 @@ def check_perform_transaction(payload):
     order = get_order_by_id(order_id)
     if not order:
         return error_order_id(payload)
-    if order["total_amount"] != params.get("amount"):
+    # Сравнение суммы: используем payment_amount
+    if order["payment_amount"] != params.get("amount"):
         return error_amount(payload)
-    # Возвращаем заглушечные параметры для товара "Кружка":
+    # Заглушка для товара "Кружка"
     stub_items = [
         {
             "discount": 0,
@@ -213,7 +216,7 @@ def create_transaction(payload):
     order = get_order_by_id(order_id)
     if not order:
         return error_order_id(payload)
-    if order["total_amount"] != params.get("amount"):
+    if order["payment_amount"] != params.get("amount"):
         return error_amount(payload)
     transaction_id = params.get("id")
     if order["status"] == "pending":
@@ -252,7 +255,8 @@ def perform_transaction(payload):
     order = get_order_by_transaction(transaction_id)
     if not order:
         return error_transaction(payload)
-    order_id = order["id"]
+    # Используем order_id вместо id
+    order_id = order["order_id"]
     if order["status"] == "processing":
         perform_time = current_timestamp()
         update_order(order_id, {
@@ -287,7 +291,7 @@ def check_transaction(payload):
     order = get_order_by_transaction(transaction_id)
     if not order:
         return error_transaction(payload)
-    order_id = order["id"]
+    order_id = order["order_id"]
     if order.get("transaction_id") != transaction_id:
         return error_transaction(payload)
     state = None
@@ -320,7 +324,7 @@ def cancel_transaction(payload):
     order = get_order_by_transaction(transaction_id)
     if not order:
         return error_transaction(payload)
-    order_id = order["id"]
+    order_id = order["order_id"]
     if order.get("transaction_id") != transaction_id:
         return error_transaction(payload)
     cancel_time = current_timestamp()
